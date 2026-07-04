@@ -48,7 +48,7 @@ cargo is not installed on the Windows host.
 | Step | Description | Status | Notes |
 |------|-------------|--------|-------|
 | 1 | lib/bin split, shared frontmatter module | complete | commit 17967a8; lessons refactor-01, refactor-02 |
-| 2 | Document + load_bundle, error/traversal/extension fixes | in progress | implemented (d0b9f07) + lessons refactor-03/04; PR open, awaiting user merge |
+| 2 | Document + load_bundle, error/traversal/extension fixes | complete | PR #1 merged (948a356); lessons refactor-03, refactor-04 |
 | 3 | SearchHit API, consts, LazyLock stop words, test rewrite | not started | |
 | 4 | config into KukaServer | not started | |
 | 5a | chunking in extract | not started | |
@@ -279,3 +279,9 @@ Newest entry last. Every status change in the dashboard gets a line here.
   and refactor-04-errors-that-lie written. PR opened for user review —
   step is complete when the user merges it. Next action after merge:
   flip dashboard to complete, then ask permission for step 3.
+- 2026-07-04 — STEP 2 COMPLETE. User merged PR #1 as merge commit 948a356
+  (merge-commit strategy agreed as the standing choice — it preserves the
+  commit hashes cited in lessons/plan). Branch deleted local + remote.
+  Next action: ask user for permission to start step 3 (SearchHit API,
+  consts, LazyLock stop words, test rewrite) on branch
+  refactor/step-3-searchhit-api.
