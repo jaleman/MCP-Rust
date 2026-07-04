@@ -52,7 +52,7 @@ cargo is not installed on the Windows host.
 | 3 | SearchHit API, consts, LazyLock stop words, test rewrite | complete | PR #2 merged (1ace0b2); lessons refactor-05, refactor-06 |
 | 4 | config into KukaServer | complete | PR #4 merged (e221860); lesson refactor-07 |
 | 5a | chunking in extract | complete | PR #5 merged (a6a813e); lesson refactor-08 |
-| 5b | inverted index, seek excerpts, reload_docs | not started | |
+| 5b | inverted index, seek excerpts, reload_docs | in progress | implemented (2072866) + lessons refactor-09/10; PR open, awaiting user merge |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
 
 ## Resuming mid-step (handoff protocol)
@@ -360,3 +360,26 @@ Newest entry last. Every status change in the dashboard gets a line here.
   cap, index-time boilerplate filtering, per-token lowercasing with
   original byte offsets, seek-based excerpts, Arc<RwLock<Index>> in
   KukaServer, reload_docs tool).
+- 2026-07-04 — STEP 5B implemented on branch
+  refactor/step-5b-inverted-index (commit 2072866). index.rs per plan:
+  vocab HashMap -> postings (doc_id, freq, positions capped at 16),
+  bodies dropped after build, boilerplate filtered at build time,
+  per-token lowercase keys with ORIGINAL byte offsets (offset hazard
+  eliminated by construction), vocabulary-level substring+fuzzy term
+  matching, length-normalised x1000 scoring, seek-based 450-byte
+  excerpt reads. KukaServer { knowledge_dir, index: Arc<RwLock<Index>> };
+  reload_docs tool (failure keeps old index); startup fails fast +
+  logs docs/terms/build-time. search.rs slimmed to shared pieces;
+  bundle::list_docs_in deleted (listing formats from index metadata in
+  main.rs); parse_query splits on non-alphanumeric to match tokenizer.
+  BEHAVIOR NOTES vs linear engine: fuzzy hits now carry real positions
+  (score > 0, genuine excerpts); exact matching is token-substring
+  rather than whole-text-substring; missing dir errors at startup/
+  reload instead of per-call. 42/42 tests (36 lib + 6 bin), clippy
+  clean. Live: 12 docs / 1051 terms in 23ms; step-5a benchmark query
+  returns same 4 docs in same order with better excerpts; reload_docs
+  verified incl. failure path; empty result for a term absent from the
+  corpus verified honest. Lessons refactor-09 (inverted index) and
+  refactor-10 (Arc/RwLock/reload) written. PR opened; step complete
+  when user merges. After merge the PLAN IS FULLY COMPLETE except
+  deferred 5c (tantivy/hybrid escape hatch, trigger conditions in §5c).

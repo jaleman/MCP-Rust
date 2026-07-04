@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 10: Arc, RwLock, and Live Reload</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 10</div>
+    <h1>Arc, RwLock, and Live Reload</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 5b — commit <code>2072866</code></span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The problem: shared state that occasionally changes</h2>
+
+  <p>
+    The index is built once at startup and read by every tool call. But documents
+    get re-extracted — so we added a <code>reload_docs</code> tool that rebuilds the
+    index <em>while the server is running</em>. That means one value, shared by many
+    readers, replaced occasionally by a writer. In Java you would reach for
+    <code>ReentrantReadWriteLock</code>, or an <code>AtomicReference</code> swap.
+    Rust's spelling:
+  </p>
+
+  <pre><code>#[derive(Clone)]
+struct KukaServer {
+    knowledge_dir: PathBuf,
+    index: Arc&lt;RwLock&lt;Index&gt;&gt;,   // ← the interesting type
+    tool_router: ToolRouter&lt;KukaServer&gt;,
+}</code></pre>
+
+  <p>Read it inside out — each layer answers one question:</p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Layer</th><th>Question it answers</th><th>Java equivalent</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Index</code></td>
+        <td>the value</td>
+        <td>the object</td>
+      </tr>
+      <tr>
+        <td><code>RwLock&lt;Index&gt;</code></td>
+        <td>who may touch it <em>right now</em>? (many readers OR one writer)</td>
+        <td><code>ReentrantReadWriteLock</code> guarding a field</td>
+      </tr>
+      <tr>
+        <td><code>Arc&lt;RwLock&lt;Index&gt;&gt;</code></td>
+        <td>who keeps it <em>alive</em>? (all clones, reference-counted)</td>
+        <td>every object reference is implicitly this; the GC does the counting</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    Java gives you <code>Arc</code>'s behavior invisibly (shared references + GC)
+    and makes the locking discipline <em>your</em> responsibility — forget the lock
+    and you get a data race at 3 a.m. Rust inverts it: sharing must be spelled out,
+    and the compiler <strong>refuses to compile</strong> access to the
+    <code>Index</code> that doesn't go through the lock. The class of bug where
+    someone reads a field while another thread writes it does not exist here.
+  </p>
+
+  <h2>Why the lock is needed at all: Clone + &amp;self</h2>
+
+  <p>
+    Two constraints force the design. The MCP framework clones the server
+    (<code>#[derive(Clone)]</code>) — so all clones must <em>share</em> one index,
+    which is exactly what <code>Arc</code> provides (cloning an Arc copies a
+    pointer and bumps a counter, not the index). And tool methods take
+    <code>&amp;self</code> — an immutable reference — yet <code>reload_docs</code>
+    must <em>replace</em> the index. Mutating through a shared reference is called
+    <strong>interior mutability</strong>, and <code>RwLock</code> is the
+    thread-safe way to get it. This is the same pattern as
+    <a href="refactor-06-lazylock-consts-and-test-layers.html">Appendix 6</a>'s
+    <code>LazyLock</code>, one step further: LazyLock is "write once, then read";
+    RwLock is "read mostly, write occasionally."
+  </p>
+
+  <pre><code>// Readers: shared lock — many tool calls can search concurrently
+fn search_docs(&amp;self, …) -&gt; … {
+    Ok(run_search(&amp;self.index.read().unwrap(), &amp;input.query))
+}
+
+// Writer: exclusive lock — the swap is atomic from any reader's view
+fn reload_docs(&amp;self) -&gt; … {
+    match Index::build(&amp;self.knowledge_dir) {
+        Ok(new_index) =&gt; {
+            *self.index.write().unwrap() = new_index;   // old index dropped here
+            …
+        }
+        // Rebuild failed (directory vanished?): report it and KEEP the old
+        // index — the server stays functional on stale data, loudly.
+        Err(e) =&gt; Ok(CallToolResult::error(…)),
+    }
+}</code></pre>
+
+  <p>
+    Note the failure policy: build the new index <em>before</em> taking the write
+    lock, and if the build fails, the old index survives. A reload can never leave
+    the server worse off than before it. The test deletes the bundle directory out
+    from under a live server and asserts both halves: the reload errors, and the
+    old index still answers queries.
+  </p>
+
+  <h2>What's with the .unwrap() on locks?</h2>
+
+  <p>
+    <code>read()</code> returns <code>Result</code> because of <strong>lock
+    poisoning</strong>: if a thread panics while holding the lock, the data might
+    be half-updated, so Rust marks the lock poisoned and makes every later access
+    return <code>Err</code>. Our writer replaces the whole value in one assignment
+    — there's no half-updated state to observe — so <code>.unwrap()</code>
+    (crash loudly on poison) is the honest choice, and the comment in the code says
+    so. Java has no equivalent concept: a thread that dies holding a
+    <code>ReentrantReadWriteLock</code>... simply never unlocks it, and the next
+    reader deadlocks silently. Poisoning is Rust being noisy where Java hangs.
+  </p>
+
+  <h2>Fail fast at the composition root</h2>
+
+  <p>
+    One behavior changed shape deliberately. A missing knowledge directory used to
+    be reported per tool call; now the index build happens in <code>main()</code>
+    before the server attaches to stdio — bad configuration stops the process with
+    a clear error instead of starting a server that can't answer anything:
+  </p>
+
+  <pre><code>let index = Index::build(&amp;knowledge_dir)
+    .with_context(|| format!("failed to build knowledge index from {}", knowledge_dir.display()))?;
+
+tracing::info!(
+    "Starting KUKA MCP server: indexed {} document(s), {} unique term(s) in {:.1?} …",
+    index.doc_count(), index.term_count(), started.elapsed(),
+);</code></pre>
+
+  <p>
+    The startup log doubles as the performance receipt: <em>12 documents, 1,051
+    unique terms, 23 ms</em>. If that number ever creeps toward seconds, the plan's
+    §5c escape hatch (persist the index, or swap internals for tantivy) is the
+    designed next move — and thanks to the <code>Vec&lt;SearchHit&gt;</code> API
+    boundary from <a href="refactor-05-searchhit-data-api.html">Appendix 5</a>,
+    nothing above the index would notice.
+  </p>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>shared reference + GC</td>
+        <td><code>Arc&lt;T&gt;</code> — sharing is explicit, counted</td>
+      </tr>
+      <tr>
+        <td><code>ReentrantReadWriteLock</code> (discipline by convention)</td>
+        <td><code>RwLock&lt;T&gt;</code> (discipline by compiler)</td>
+      </tr>
+      <tr>
+        <td><code>AtomicReference.set(newIndex)</code></td>
+        <td><code>*lock.write().unwrap() = new_index</code></td>
+      </tr>
+      <tr>
+        <td>dead thread holding a lock → silent deadlock</td>
+        <td>poisoned lock → loud <code>Err</code> / panic</td>
+      </tr>
+      <tr>
+        <td>mutating state behind a <code>final</code> field reference</td>
+        <td>interior mutability — <code>&amp;self</code> + <code>RwLock</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "When would I use Mutex instead of RwLock?",
+    "What happens to in-flight searches holding the read lock when reload wants to write?",
+    or "Why build the new index before taking the write lock instead of inside it?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-09-inverted-index.html">← Refactor Appendix 9: The Inverted Index</a>
+    <a href="0024-mcp-resources.html">← Back to Lesson 24: MCP Resources</a>
+  </nav>
+
+</div>
+</body>
+</html>
