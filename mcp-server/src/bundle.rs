@@ -13,14 +13,6 @@ use rmcp::model::{CallToolResult, Content};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-// Returns the knowledge bundle directory path.
-// Reads KUKA_KNOWLEDGE_DIR from the environment if set; falls back to "knowledge".
-// Using an env var lets tests and production deployments override the path
-// without recompiling.
-pub fn knowledge_dir() -> PathBuf {
-    PathBuf::from(std::env::var("KUKA_KNOWLEDGE_DIR").unwrap_or_else(|_| "knowledge".to_string()))
-}
-
 /// One loaded markdown document with its frontmatter parsed into fields.
 /// In Java terms: the domain entity a repository returns, instead of handing
 /// callers a raw file and making each of them parse it.
