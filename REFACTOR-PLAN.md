@@ -51,7 +51,7 @@ cargo is not installed on the Windows host.
 | 2 | Document + load_bundle, error/traversal/extension fixes | complete | PR #1 merged (948a356); lessons refactor-03, refactor-04 |
 | 3 | SearchHit API, consts, LazyLock stop words, test rewrite | complete | PR #2 merged (1ace0b2); lessons refactor-05, refactor-06 |
 | 4 | config into KukaServer | complete | PR #4 merged (e221860); lesson refactor-07 |
-| 5a | chunking in extract | in progress | implemented (a79e531) + lesson refactor-08; PR open, awaiting user merge |
+| 5a | chunking in extract | complete | PR #5 merged (a6a813e); lesson refactor-08 |
 | 5b | inverted index, seek excerpts, reload_docs | not started | |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
 
@@ -352,3 +352,11 @@ Newest entry last. Every status change in the dashboard gets a line here.
   out of scope. Lesson refactor-08-page-chunking written. PR opened;
   step complete when user merges. Next after merge: ask permission for
   step 5b (inverted index) on branch refactor/step-5b-inverted-index.
+- 2026-07-04 — STEP 5A COMPLETE. User merged PR #5 (merge commit
+  a6a813e). Branch deleted local + remote; master synced; tree clean.
+  Only step 5b (inverted index) remains. Next action: ask user for
+  permission to start step 5b on branch refactor/step-5b-inverted-index
+  (Index struct per plan §5b: vocab HashMap, postings with 16-position
+  cap, index-time boilerplate filtering, per-token lowercasing with
+  original byte offsets, seek-based excerpts, Arc<RwLock<Index>> in
+  KukaServer, reload_docs tool).
