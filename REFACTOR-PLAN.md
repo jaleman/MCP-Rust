@@ -50,7 +50,7 @@ cargo is not installed on the Windows host.
 | 1 | lib/bin split, shared frontmatter module | complete | commit 17967a8; lessons refactor-01, refactor-02 |
 | 2 | Document + load_bundle, error/traversal/extension fixes | complete | PR #1 merged (948a356); lessons refactor-03, refactor-04 |
 | 3 | SearchHit API, consts, LazyLock stop words, test rewrite | complete | PR #2 merged (1ace0b2); lessons refactor-05, refactor-06 |
-| 4 | config into KukaServer | in progress | implemented (8b029e8) + lesson refactor-07; PR open, awaiting user merge |
+| 4 | config into KukaServer | complete | PR #4 merged (e221860); lesson refactor-07 |
 | 5a | chunking in extract | not started | |
 | 5b | inverted index, seek excerpts, reload_docs | not started | |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
@@ -330,3 +330,9 @@ Newest entry last. Every status change in the dashboard gets a line here.
   PR opened; step complete when user merges. Next after merge: ask
   permission for step 5a (chunking in extract) on branch
   refactor/step-5a-chunking.
+- 2026-07-04 — STEP 4 COMPLETE. User merged PR #4 (merge commit e221860).
+  Branch deleted local + remote; master synced; tree clean. Steps 1-4
+  all complete — the architecture is ready for step 5. Next action: ask
+  user for permission to start step 5a (page-boundary chunking in
+  extract, ~8 KB target, one file per chunk with parent/pages
+  frontmatter).
