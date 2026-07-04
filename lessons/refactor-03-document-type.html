@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 3: The Document Type — from Raw Strings to a Domain Entity</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 3</div>
+    <h1>The Document Type — from Raw Strings to a Domain Entity</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 2 — commit <code>d0b9f07</code></span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The missing type</h2>
+
+  <p>
+    After step 1 the code was better <em>organised</em>, but three functions still did
+    the same dance independently: <code>list_docs_in</code>, <code>search_docs_in</code>,
+    and <code>list_resources</code> each walked the directory, checked the extension,
+    read the file into a <code>String</code>, and called
+    <code>extract_frontmatter_field</code> for whichever fields they happened to need —
+    re-scanning the frontmatter block on every call. Repeated code like that is usually
+    a symptom of a <strong>missing type</strong>: there was no value in the program that
+    meant "a loaded document".
+  </p>
+
+  <p><strong>Rust — <code>bundle.rs</code>, new in this step:</strong></p>
+  <pre><code>/// One loaded markdown document with its frontmatter parsed into fields.
+#[derive(Debug)]
+pub struct Document {
+    pub path: PathBuf,
+    pub stem: String,            // filename without .md — doubles as the resource URI id
+    pub title: String,
+    pub doc_type: String,
+    pub resource: String,
+    pub description: Option&lt;String&gt;,   // not every doc has one
+    pub content: String,         // full file text, frontmatter included
+    pub body_start: usize,       // byte offset just past the closing ---
+}
+
+impl Document {
+    pub fn load(path: &amp;Path) -&gt; Result&lt;Self&gt; { … }   // parse once, here, only here
+
+    /// The document text after the frontmatter block.
+    pub fn body(&amp;self) -&gt; &amp;str {
+        &amp;self.content[self.body_start..]
+    }
+}
+
+pub fn load_bundle(dir: &amp;Path) -&gt; Result&lt;Vec&lt;Document&gt;&gt; { … }</code></pre>
+
+  <p><strong>The Java equivalent</strong> — an entity plus a repository:</p>
+  <pre><code>public record Document(
+        Path path,
+        String stem,
+        String title,
+        String docType,
+        String resource,
+        Optional&lt;String&gt; description,
+        String content,
+        int bodyStart) {
+
+    public static Document load(Path path) throws IOException { … }
+
+    public String body() {
+        return content.substring(bodyStart);
+    }
+}
+
+public final class Bundle {
+    /** The repository method every consumer calls. */
+    public static List&lt;Document&gt; loadBundle(Path dir) throws IOException { … }
+}</code></pre>
+
+  <p>
+    This is the repository pattern in miniature: consumers ask for domain objects and
+    never touch files or parsing. The three call sites collapsed accordingly —
+    <code>list_docs_in</code> went from a 25-line walk-and-parse loop to
+    "<code>load_bundle</code>, group by <code>doc.doc_type</code>, format";
+    <code>search_docs_in</code> lost all its frontmatter code; and
+    <code>list_resources</code> in main.rs became a single iterator chain:
+  </p>
+
+  <pre><code>let resources: Vec&lt;Resource&gt; = docs
+    .into_iter()
+    .map(|doc| {
+        let uri = format!("kuka://docs/{}", doc.stem);
+        let mut raw = RawResource::new(uri, doc.stem)
+            .with_title(doc.title)
+            .with_mime_type("text/markdown".to_string());
+        if let Some(desc) = doc.description {   // like ifPresent() on Optional
+            raw = raw.with_description(desc);
+        }
+        Annotated::new(raw, None)
+    })
+    .collect();</code></pre>
+
+  <h2>Two Rust details worth pausing on</h2>
+
+  <p>
+    <strong>1. <code>body()</code> returns <code>&amp;str</code>, not <code>String</code>.</strong>
+    In Java, <code>content.substring(bodyStart)</code> copies the characters into a new
+    String. Rust's <code>&amp;self.content[self.body_start..]</code> copies <em>nothing</em> —
+    it returns a slice: a pointer into the original text plus a length. The borrow checker
+    guarantees the <code>Document</code> outlives the slice, which is why this is safe
+    without a garbage collector (see
+    <a href="appendix-01-ownership-and-borrowing.html">Appendix 1</a>).
+    With gigabyte documents on the roadmap, "no copies unless asked" is a habit worth building.
+  </p>
+
+  <p>
+    <strong>2. <code>description</code> is <code>Option&lt;String&gt;</code>.</strong>
+    The other fields have sensible fallbacks (title falls back to the filename, type to
+    "uncategorised"), so they're plain <code>String</code>s. But a missing description is
+    genuinely <em>absent</em> — the resource listing skips it entirely. Encoding that as
+    <code>Option</code> instead of an empty string means the compiler forces every user of
+    the field to handle absence, exactly like <code>Optional</code> done consistently in Java.
+    The type of each field now documents which fallback policy applies.
+  </p>
+
+  <h2>Compile-time enforcement we got for free</h2>
+
+  <p>
+    One bug fixed in this step wasn't found by a test — it was found by the compiler.
+    A new test called <code>result.unwrap_err()</code>, which requires the success value
+    (<code>Vec&lt;Document&gt;</code>) to be printable for debugging. The build failed with
+    <code>error[E0277]: `Document` doesn't implement `std::fmt::Debug`</code> until
+    <code>#[derive(Debug)]</code> was added. In Java, every object has a
+    <code>toString()</code> whether useful or not; in Rust, printability is opt-in and
+    checked at compile time — the same derive-what-you-need philosophy as
+    <code>#[derive(Deserialize)]</code> from <a href="0005-tools-with-parameters.html">Lesson 5</a>.
+  </p>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>entity + repository (<code>Document</code>, <code>loadBundle()</code>)</td>
+        <td><code>struct Document</code> + <code>fn load_bundle()</code></td>
+      </tr>
+      <tr>
+        <td><code>content.substring(bodyStart)</code> — copies</td>
+        <td><code>&amp;content[body_start..]</code> — borrows, zero copy</td>
+      </tr>
+      <tr>
+        <td><code>Optional&lt;String&gt; description</code></td>
+        <td><code>description: Option&lt;String&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>toString()</code> exists on everything</td>
+        <td><code>#[derive(Debug)]</code> — opt-in, compiler-checked</td>
+      </tr>
+      <tr>
+        <td><code>opt.ifPresent(v -&gt; …)</code></td>
+        <td><code>if let Some(v) = opt { … }</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "Why does body() need a lifetime and where is it hidden?",
+    "When should a field be Option&lt;String&gt; vs a String with a default?",
+    or "Why did into_iter() work in list_resources but iter() is used in search?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-02-shared-frontmatter-module.html">← Refactor Appendix 2: One Frontmatter Module</a>
+    <a href="refactor-04-errors-that-lie.html">Refactor Appendix 4: Errors That Lie →</a>
+  </nav>
+
+</div>
+</body>
+</html>

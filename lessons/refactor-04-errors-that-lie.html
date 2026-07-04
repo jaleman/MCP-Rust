@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 4: Errors That Lie — Result, Context, and the Traversal Guard</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 4</div>
+    <h1>Errors That Lie — Result, Context, and the Traversal Guard</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 2 — commit <code>d0b9f07</code></span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The bug: a missing directory that looked like an empty one</h2>
+
+  <p>
+    Before this step, every consumer wrapped the directory walk in
+    <code>if let Ok(entries) = std::fs::read_dir(dir)</code>. That pattern reads as
+    "handle the error", but it actually <em>discards</em> it — if the directory doesn't
+    exist, the loop body simply never runs, and the tool responds
+    <code>"No documents found in the knowledge bundle."</code>
+  </p>
+
+  <p>
+    Why does this matter so much here? Because MCP clients launch this server from an
+    <em>arbitrary working directory</em>, and our default path is the relative
+    <code>"knowledge"</code>. The single most likely failure mode of the entire server
+    is "directory not found" — and it presented as a calm, plausible, <em>wrong</em>
+    answer. An error that lies is worse than a crash: it sends whoever is debugging
+    (human or AI agent) straight past the actual cause.
+  </p>
+
+  <p>
+    The Java equivalent of the old code is an empty catch block:
+  </p>
+
+  <pre><code>// Java — the same sin, in its native syntax
+List&lt;Document&gt; docs = new ArrayList&lt;&gt;();
+try (var stream = Files.list(dir)) {
+    stream.forEach(p -&gt; docs.add(Document.load(p)));
+} catch (IOException e) {
+    // swallowed — caller sees an empty list and thinks the bundle is empty
+}</code></pre>
+
+  <h2>The fix: errors travel in the return type</h2>
+
+  <p>
+    <code>load_bundle</code> now returns <code>Result&lt;Vec&lt;Document&gt;&gt;</code>,
+    and the missing-directory case is a real error with the path and the remedy in
+    its message:
+  </p>
+
+  <pre><code>pub fn load_bundle(dir: &amp;Path) -&gt; Result&lt;Vec&lt;Document&gt;&gt; {
+    let entries = std::fs::read_dir(dir).with_context(|| {
+        format!(
+            "knowledge directory not found: {} — set KUKA_KNOWLEDGE_DIR or run from the project root",
+            dir.display()
+        )
+    })?;
+    …
+}</code></pre>
+
+  <p>
+    Two pieces of machinery here, both from earlier lessons but now doing real work:
+  </p>
+
+  <p>
+    <strong><code>?</code> is a typed <code>throws</code>.</strong> Where Java propagates
+    exceptions invisibly (any call might throw), Rust makes propagation a visible,
+    one-character operator on functions whose signature says <code>Result</code>.
+    <code>read_dir(dir)?</code> is the moral equivalent of letting an
+    <code>IOException</code> bubble up a <code>throws IOException</code> chain.
+  </p>
+
+  <p>
+    <strong><code>.with_context(…)</code> wraps like exception chaining.</strong>
+    anyhow's context is Java's <code>throw new RuntimeException("knowledge directory
+    not found: " + dir, cause)</code> — the original OS error stays attached underneath.
+    Printing with <code>{e:#}</code> shows the whole chain, which is how the live server
+    now reports:
+  </p>
+
+  <pre><code>Cannot read knowledge bundle: knowledge directory not found: knowledge —
+set KUKA_KNOWLEDGE_DIR or run from the project root: No such file or directory (os error 2)</code></pre>
+
+  <h2>Choosing an error policy per failure, not per function</h2>
+
+  <p>
+    Not every failure deserves the same treatment. The refactor made three deliberate,
+    different choices inside <code>load_bundle</code> and its callers:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Failure</th><th>Policy</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>bundle directory missing</td>
+        <td>hard error — MCP <code>isError: true</code></td>
+        <td>nothing can work; the message names the fix</td>
+      </tr>
+      <tr>
+        <td>one file unreadable</td>
+        <td><code>tracing::warn!</code> and skip it</td>
+        <td>one bad file must not take down the other 400</td>
+      </tr>
+      <tr>
+        <td>bundle genuinely empty</td>
+        <td>normal success message</td>
+        <td>a valid state, not a fault</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The tool layer converts the hard error into an MCP result the client can see —
+    note this is <code>CallToolResult::error(…)</code>, not <code>success</code>, so
+    agents know the call failed rather than "found nothing":
+  </p>
+
+  <pre><code>let docs = match load_bundle(dir) {
+    Ok(docs) =&gt; docs,
+    Err(e) =&gt; {
+        return Ok(CallToolResult::error(vec![Content::text(format!(
+            "Cannot read knowledge bundle: {e:#}"
+        ))]));
+    }
+};</code></pre>
+
+  <h2>The traversal guard: never trust a URI</h2>
+
+  <p>
+    The same commit closed a real security hole. <code>read_resource</code> takes a URI
+    like <code>kuka://docs/reflector-guide</code>, strips the prefix, and joins the rest
+    onto the knowledge directory. Nothing stopped a client from sending
+    <code>kuka://docs/../../etc/passwd</code> — and <code>join</code> would cheerfully
+    escape the bundle and read any <code>.md</code>-suffixed path on the machine.
+    (Java's <code>Path.resolve()</code> has exactly the same behavior — path traversal
+    is the classic servlet vulnerability, not a Rust-specific one.)
+  </p>
+
+  <pre><code>/// Only plain file stems are valid — no separators, no parent references.
+pub fn resource_stem_is_safe(stem: &amp;str) -&gt; bool {
+    !stem.is_empty() &amp;&amp; !stem.contains(['/', '\\']) &amp;&amp; !stem.contains("..")
+}</code></pre>
+
+  <p>
+    The guard is a plain, pure function in <code>bundle.rs</code> rather than inline in
+    the handler — deliberately. The async handler with its <code>RequestContext</code>
+    is awkward to unit-test; a pure <code>&amp;str -&gt; bool</code> function is trivial to
+    test exhaustively (and is: valid stems, <code>../</code>, backslashes, empty).
+    Verified against the live server:
+  </p>
+
+  <pre><code>→ {"method":"resources/read","params":{"uri":"kuka://docs/../../etc/passwd"}}
+← {"error":{"code":-32002,"message":"Invalid resource URI: kuka://docs/../../etc/passwd"}}</code></pre>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>throws IOException</code> (invisible at call sites)</td>
+        <td><code>-&gt; Result&lt;T&gt;</code> + visible <code>?</code> at each call</td>
+      </tr>
+      <tr>
+        <td><code>new RuntimeException(msg, cause)</code></td>
+        <td><code>.with_context(|| msg)</code> (anyhow)</td>
+      </tr>
+      <tr>
+        <td><code>e.printStackTrace()</code> / logger chain</td>
+        <td><code>format!("{e:#}")</code> prints the cause chain</td>
+      </tr>
+      <tr>
+        <td>empty <code>catch {}</code> block</td>
+        <td><code>if let Ok(x) = …</code> with no else — same smell!</td>
+      </tr>
+      <tr>
+        <td>servlet path-traversal check</td>
+        <td><code>resource_stem_is_safe</code> before <code>Path::join</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The habit to take away: in Rust, error-swallowing is <em>syntactically visible</em> —
+    any <code>if let Ok(…)</code> without an else branch deserves the same suspicion an
+    empty catch block gets in Java code review.
+  </p>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "What's the difference between anyhow::Error and a custom error enum with thiserror?",
+    "Why does the tool return Ok(CallToolResult::error(…)) instead of Err(…)?",
+    or "Would canonicalize() be a stronger traversal guard than string checks?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-03-document-type.html">← Refactor Appendix 3: The Document Type</a>
+    <a href="0024-mcp-resources.html">← Back to Lesson 24: MCP Resources</a>
+  </nav>
+
+</div>
+</body>
+</html>
