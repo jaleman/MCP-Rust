@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 6: LazyLock, Named Constants, and Test Layers</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 6</div>
+    <h1>LazyLock, Named Constants, and Test Layers</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 3 — commit <code>793fa54</code></span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>Stop words: from per-call rebuild to LazyLock</h2>
+
+  <p>
+    Every call to search used to build the stop-word <code>HashSet</code> from scratch —
+    fifty-odd insertions, allocated and thrown away per query. The set never changes,
+    so it belongs in a <strong>static</strong> built exactly once:
+  </p>
+
+  <p><strong>Rust:</strong></p>
+  <pre><code>use std::sync::LazyLock;
+
+static STOP_WORDS: LazyLock&lt;HashSet&lt;&amp;str&gt;&gt; = LazyLock::new(|| {
+    HashSet::from(["a", "an", "the", "is", /* … */ "nor"])
+});
+
+// Used like a normal value — first access runs the closure, later
+// accesses reuse the same set:
+.filter(|word| !STOP_WORDS.contains(word))</code></pre>
+
+  <p><strong>Java equivalents</strong> — two familiar shapes rolled into one:</p>
+  <pre><code>// Eager static initializer — Java's usual answer:
+private static final Set&lt;String&gt; STOP_WORDS = Set.of("a", "an", "the", /* … */ "nor");
+
+// Lazy, thread-safe, initialize-on-first-use — what LazyLock actually is
+// (the "initialization-on-demand holder" idiom, without the ceremony):
+private static class Holder {
+    static final Set&lt;String&gt; STOP_WORDS = buildStopWords();
+}</code></pre>
+
+  <p>
+    Why doesn't Rust just allow <code>static STOP_WORDS: HashSet = HashSet::from(…)</code>
+    directly? Because statics must be computable at <em>compile time</em>, and building a
+    <code>HashSet</code> allocates on the heap at runtime. <code>LazyLock</code> bridges
+    the gap: a compile-time-constant <em>wrapper</em> around a runtime-initialized value,
+    with thread-safe once-only initialization guaranteed by the type system rather than
+    by class-loading rules as in Java.
+  </p>
+
+  <h2>Magic numbers become tuning knobs</h2>
+
+  <p>
+    The search code was sprinkled with bare numbers: <code>500</code>, <code>150</code>,
+    <code>300</code>, <code>3</code>, <code>400</code>, <code>7</code> — each meaningful,
+    none labelled. They're now <code>const</code> declarations at the top of
+    <code>search.rs</code>, so the tunable surface of the engine is one screenful:
+  </p>
+
+  <pre><code>const PROXIMITY_WINDOW: usize = 500;      // ± window for co-occurrence scoring
+const EXCERPT_BEFORE: usize = 150;        // excerpt context before a match
+const EXCERPT_AFTER: usize = 300;         //   …and after
+const MAX_EXCERPTS: usize = 3;            // excerpts shown per document
+const FALLBACK_EXCERPT_LEN: usize = 400;  // body-start excerpt for fuzzy-only hits
+const BOILERPLATE_MIN_REPEATS: usize = 3; // line repeated ≥ this = header/footer
+const FUZZY_MIN_TERM_LEN: usize = 4;      // shorter terms must match exactly
+const FUZZY_ONE_TYPO_MAX_LEN: usize = 7;  // ≤ this: 1 typo; longer: 2</code></pre>
+
+  <p>
+    A Rust <code>const</code> is closest to Java's <code>static final int</code>, with one
+    difference worth knowing: consts are <em>inlined</em> at every use site — they have no
+    address, no memory of their own. (A Rust <code>static</code>, by contrast, is one
+    shared memory location, like a true Java static field.) Rule of thumb: plain numbers
+    and short strings → <code>const</code>; anything heap-allocated or identity-sensitive
+    → <code>static</code>, usually with <code>LazyLock</code>.
+  </p>
+
+  <p>
+    This step also cleared the last clippy warnings, mostly by asking a question Java
+    developers never face: <em>does this sort need to be stable?</em>
+    <code>positions.sort_unstable()</code> — positions are deduped integers, stability is
+    meaningless, and the unstable sort is faster. But the final hit ranking kept a
+    <em>stable</em> <code>sort_by_key</code> on purpose: equal-score documents should stay
+    in bundle order rather than shuffle between runs. Java's <code>Collections.sort</code>
+    is always stable, so the choice never comes up; Rust makes you pick, and the pick
+    documents intent.
+  </p>
+
+  <h2>Test layers: the library tests the engine, the binary tests the wording</h2>
+
+  <p>
+    Moving presentation into <code>main.rs</code> raised a question: where do the tests
+    for "missing bundle dir → <code>isError: true</code>" live now? That behavior belongs
+    to the <em>tool layer</em>, so its tests moved into <code>main.rs</code> itself —
+    binaries can have <code>#[cfg(test)]</code> modules too, and <code>cargo test</code>
+    runs them as a separate suite (you can see it in the output: 23 lib tests + 4 bin tests).
+  </p>
+
+  <p>
+    One boundary surprised us on the way: the binary tests <strong>cannot use the
+    library's <code>test_util</code></strong> fixture. A binary is a separate crate, and
+    when it links against the library, the library is compiled <em>without</em>
+    <code>cfg(test)</code> — the test-only module simply doesn't exist in that build.
+    The Java analogy: test fixtures in module A's <code>src/test/java</code> are invisible
+    to module B's tests unless you publish a separate test-jar. Same principle, enforced
+    by the compiler. So <code>main.rs</code>'s tests build their own little fixture, and
+    each layer asserts only what it owns:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Layer</th><th>Tests live in</th><th>Assert on</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>engine (matching, scoring, excerpts)</td>
+        <td><code>search.rs</code> (lib)</td>
+        <td><code>SearchHit</code> fields</td>
+      </tr>
+      <tr>
+        <td>loading (frontmatter, missing dir)</td>
+        <td><code>bundle.rs</code> (lib)</td>
+        <td><code>Document</code> fields, <code>Result</code></td>
+      </tr>
+      <tr>
+        <td>presentation (wording, isError, guards)</td>
+        <td><code>main.rs</code> (bin)</td>
+        <td><code>CallToolResult</code> text and flags</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>static final Set&lt;String&gt;</code> (eager, class-load time)</td>
+        <td><code>static X: LazyLock&lt;…&gt;</code> (lazy, first use)</td>
+      </tr>
+      <tr>
+        <td>initialization-on-demand holder idiom</td>
+        <td><code>LazyLock::new(|| …)</code> — built in</td>
+      </tr>
+      <tr>
+        <td><code>static final int WINDOW = 500;</code></td>
+        <td><code>const PROXIMITY_WINDOW: usize = 500;</code> (inlined)</td>
+      </tr>
+      <tr>
+        <td>sorts are always stable</td>
+        <td>choose: <code>sort</code> (stable) vs <code>sort_unstable</code> (faster)</td>
+      </tr>
+      <tr>
+        <td>test-jar to share fixtures across modules</td>
+        <td><code>cfg(test)</code> code never crosses crate boundaries</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "What's the difference between LazyLock and OnceLock?",
+    "Why are Rust consts inlined and when does that matter?",
+    or "How would I share a test fixture between the lib and the bin if I really needed to?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-05-searchhit-data-api.html">← Refactor Appendix 5: Return Data, Not Prose</a>
+    <a href="0016-unit-tests.html">← Back to Lesson 16: Unit Tests</a>
+  </nav>
+
+</div>
+</body>
+</html>

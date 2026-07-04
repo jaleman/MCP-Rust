@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 5: Return Data, Not Prose — the SearchHit API</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 5</div>
+    <h1>Return Data, Not Prose — the SearchHit API</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 3 — commit <code>793fa54</code></span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The smell: a search engine that writes sentences</h2>
+
+  <p>
+    Until this step, <code>search_docs_in</code> did everything — matching, scoring,
+    excerpting — and then, in the same breath, composed the user-facing English:
+    <code>"Found 3 result(s) for '…'"</code>, bullet points, <code>Source:</code> lines.
+    The function's return type was an MCP <code>CallToolResult</code>, so the search
+    engine couldn't even be <em>called</em> without dragging the protocol library along.
+  </p>
+
+  <p>
+    In Java terms: a service class returning pre-rendered HTML instead of DTOs.
+    The moment you want a second consumer (a different output format, the upcoming
+    inverted index, a benchmark harness), you're stuck parsing your own prose.
+    And our tests were doing exactly that:
+  </p>
+
+  <pre><code>// The old tests — substring-fishing in Debug output
+let result = search_docs_in(temp_dir.path(), "reflector height".to_string()).unwrap();
+let output = format!("{:?}", result);
+assert!(output.contains("Reflector Guide"));   // matches the title… or ANY
+assert!(output.contains("150"));               // occurrence of "150" anywhere!</code></pre>
+
+  <h2>The fix: layered like a Spring app</h2>
+
+  <p>
+    The engine now returns plain data, and the binary owns every user-facing word —
+    the same separation as a Spring service returning DTOs while the controller
+    renders the response:
+  </p>
+
+  <p><strong>Rust — <code>search.rs</code> (the "service"):</strong></p>
+  <pre><code>/// One matching document, ready for whatever presentation layer wants it.
+#[derive(Debug)]
+pub struct SearchHit {
+    pub title: String,
+    pub resource: String,
+    pub score: usize,
+    pub excerpts: Vec&lt;String&gt;,
+}
+
+pub fn parse_query(query_lower: &amp;str) -&gt; Vec&lt;&amp;str&gt; { … }   // stop-word filter
+
+pub fn search(docs: &amp;[Document], terms: &amp;[&amp;str]) -&gt; Vec&lt;SearchHit&gt; {
+    let mut hits: Vec&lt;SearchHit&gt; = docs
+        .iter()
+        .filter_map(|doc| match_document(doc, terms))   // Some(hit) kept, None dropped
+        .collect();
+    hits.sort_by_key(|hit| std::cmp::Reverse(hit.score));
+    hits
+}</code></pre>
+
+  <p><strong>Java equivalent:</strong></p>
+  <pre><code>public record SearchHit(String title, String resource, int score, List&lt;String&gt; excerpts) {}
+
+public List&lt;SearchHit&gt; search(List&lt;Document&gt; docs, List&lt;String&gt; terms) {
+    return docs.stream()
+        .map(doc -&gt; matchDocument(doc, terms))     // returns Optional&lt;SearchHit&gt;
+        .flatMap(Optional::stream)                 // Rust's filter_map in two steps
+        .sorted(Comparator.comparingInt(SearchHit::score).reversed())
+        .toList();
+}</code></pre>
+
+  <p>
+    Note <code>filter_map</code>: it maps each document to <code>Option&lt;SearchHit&gt;</code>
+    and keeps only the <code>Some</code>s — Java needs <code>map</code> +
+    <code>flatMap(Optional::stream)</code> to say the same thing
+    (see <a href="appendix-05-flatmap.html">Appendix 5</a>).
+    And <code>Reverse(hit.score)</code> is Rust's idiom for a descending sort key —
+    the equivalent of <code>Comparator.reversed()</code>.
+  </p>
+
+  <p><strong>The presentation layer moved to <code>main.rs</code> (the "controller"):</strong></p>
+  <pre><code>fn run_search(dir: &amp;Path, query: &amp;str) -&gt; CallToolResult {
+    let query_lower = query.to_lowercase();
+    let terms = parse_query(&amp;query_lower);
+    if terms.is_empty() { /* "only common words" message */ }
+
+    let docs = match load_bundle(dir) { /* error → CallToolResult::error */ };
+
+    let hits = search(&amp;docs, &amp;terms);
+    // …format hits into the exact same text output as before…
+}</code></pre>
+
+  <p>
+    One design decision worth noticing: <code>search()</code> takes <code>terms</code>,
+    not the raw query. The caller runs <code>parse_query</code> itself so it can detect
+    the all-stop-words case and answer with guidance — the engine never needs to know
+    that message exists. Splitting "parse" from "execute" is what lets each layer stay
+    ignorant of the other's concerns.
+  </p>
+
+  <h2>What the tests look like now</h2>
+
+  <pre><code>let hits = run_search(temp_dir.path(), "reflector height");
+
+assert_eq!(hits.len(), 1);
+assert_eq!(hits[0].title, "Reflector Guide");     // the FIELD, not a substring
+assert_eq!(hits[0].resource, "kuka-docs/test.pdf");
+assert!(hits[0].score &gt; 0);
+assert!(hits[0].excerpts.iter().any(|e| e.contains("150")));</code></pre>
+
+  <p>
+    Three things became testable that simply weren't before: <strong>ranking order</strong>
+    (a new test writes two documents and asserts <code>hits[0]</code> is the
+    higher-scoring one), <strong>score semantics</strong> (fuzzy-only matches now
+    provably return <code>score == 0</code> with a body-start fallback excerpt), and
+    <strong>which field</strong> contains a value (the old <code>contains("150")</code>
+    would have passed if "150" appeared anywhere in the Debug dump, including the score).
+  </p>
+
+  <h2>The engine no longer knows MCP exists</h2>
+
+  <p>
+    <code>search.rs</code> now imports <code>crate::bundle::Document</code>, the standard
+    library, and <code>strsim</code> — that's all. The rmcp imports are gone. This is the
+    property that makes step 5 cheap: the inverted index will change how
+    <code>search()</code> finds hits internally, and nothing above the
+    <code>Vec&lt;SearchHit&gt;</code> boundary will notice.
+  </p>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>service returns DTOs; controller renders</td>
+        <td>search.rs returns <code>SearchHit</code>; main.rs formats</td>
+      </tr>
+      <tr>
+        <td><code>map(…).flatMap(Optional::stream)</code></td>
+        <td><code>filter_map(|doc| …)</code></td>
+      </tr>
+      <tr>
+        <td><code>Comparator.comparingInt(…).reversed()</code></td>
+        <td><code>sort_by_key(|h| Reverse(h.score))</code></td>
+      </tr>
+      <tr>
+        <td>assert on <code>toString()</code> output (brittle)</td>
+        <td>assert on struct fields (precise)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "Why does parse_query return Vec&lt;&amp;str&gt; instead of Vec&lt;String&gt;, and what lifetime ties it to the input?",
+    "When is sort_by_key(Reverse(…)) better than sort_by with a closure?",
+    or "Why does match_document clone title and resource instead of borrowing them?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-04-errors-that-lie.html">← Refactor Appendix 4: Errors That Lie</a>
+    <a href="refactor-06-lazylock-consts-and-test-layers.html">Refactor Appendix 6: LazyLock, Consts, and Test Layers →</a>
+  </nav>
+
+</div>
+</body>
+</html>
