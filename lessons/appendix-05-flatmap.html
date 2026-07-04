@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Appendix 5: flatMap — Java vs Rust</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Appendix 5</div>
+    <h1>flatMap — Java vs Rust</h1>
+    <div class="lesson-meta">
+      <span>Reference — return to this when flat_map() is confusing</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The problem flatMap solves</h2>
+
+  <p>
+    When you call <code>map()</code> and the transformation produces a <em>collection</em>
+    per element, you end up with a nested collection — a list of lists — when you
+    usually just want a flat list. <code>flatMap()</code> maps and then immediately
+    flattens, giving you one stream of all the results merged together.
+  </p>
+
+  <div class="diagram">
+    map()&nbsp;&nbsp;&nbsp; → [[0, 21, 45], [102, 310]]&nbsp; ← list of lists (nested)<br>
+    flatMap() → [0, 21, 45, 102, 310]&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ← single flat list
+  </div>
+
+  <h2>Example 1 — Splitting sentences into words</h2>
+
+  <p>
+    The simplest case: you have a list of sentences and want all the individual words
+    in one flat list.
+  </p>
+
+  <p><strong>Java:</strong></p>
+  <pre><code>List&lt;String&gt; sentences = List.of("reflectors must", "minimum height");
+
+// map() — gives you a List of arrays (nested, awkward to work with)
+List&lt;String[]&gt; nested = sentences.stream()
+    .map(s -> s.split(" "))
+    .collect(Collectors.toList());
+// Result: [["reflectors", "must"], ["minimum", "height"]]
+
+// flatMap() — merges all words into one flat List
+List&lt;String&gt; words = sentences.stream()
+    .flatMap(s -> Arrays.stream(s.split(" ")))
+    .collect(Collectors.toList());
+// Result: ["reflectors", "must", "minimum", "height"]</code></pre>
+
+  <p><strong>Rust:</strong></p>
+  <pre><code>let sentences = vec!["reflectors must", "minimum height"];
+
+// map() — gives you an iterator of iterators (nested)
+// This is awkward and rarely what you want
+let nested: Vec&lt;Vec&lt;&str&gt;&gt; = sentences.iter()
+    .map(|s| s.split_whitespace().collect())
+    .collect();
+// Result: [["reflectors", "must"], ["minimum", "height"]]
+
+// flat_map() — merges all words into one flat Vec
+let words: Vec&lt;&str&gt; = sentences.iter()
+    .flat_map(|s| s.split_whitespace())
+    .collect();
+// Result: ["reflectors", "must", "minimum", "height"]</code></pre>
+
+  <h2>Example 2 — Finding all match positions (from this project)</h2>
+
+  <p>
+    In <a href="0015-multiple-excerpts.html">Lesson 15</a>, <code>flat_map</code> collects
+    every position where any query term appears in the document. Each term maps to multiple
+    positions, and <code>flat_map</code> merges all those position lists into one.
+  </p>
+
+  <p><strong>Java:</strong></p>
+  <pre><code>List&lt;String&gt; terms = List.of("height", "reflector");
+String docLower = "reflector height limit 2000mm, minimum height 150mm";
+
+// Each term maps to a list of positions — flatMap merges them all
+List&lt;Integer&gt; positions = terms.stream()
+    .flatMap(term -> {
+        // Find every occurrence of this term in the document
+        List&lt;Integer&gt; found = new ArrayList&lt;&gt;();
+        int pos = docLower.indexOf(term);
+        while (pos != -1) {
+            found.add(pos);
+            pos = docLower.indexOf(term, pos + 1);
+        }
+        return found.stream();
+    })
+    .sorted()
+    .distinct()
+    .collect(Collectors.toList());
+// Result: [0, 10, 41] — positions of "reflector", "height", "height"</code></pre>
+
+  <p><strong>Rust:</strong></p>
+  <pre><code>let terms = vec!["height", "reflector"];
+let lower = "reflector height limit 2000mm, minimum height 150mm";
+
+// match_indices() returns all occurrences as (position, matched_text) tuples.
+// flat_map merges the per-term iterators into one stream of positions.
+let mut positions: Vec&lt;usize&gt; = terms.iter()
+    .flat_map(|term| lower.match_indices(*term).map(|(pos, _)| pos))
+    .collect();
+
+positions.sort();   // sort so duplicates are adjacent
+positions.dedup();  // remove consecutive duplicates
+
+// Result: [0, 10, 41] — same positions, deduped</code></pre>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>stream.flatMap(x -&gt; subStream)</code></td>
+        <td><code>iter.flat_map(|x| sub_iter)</code></td>
+      </tr>
+      <tr>
+        <td><code>stream.distinct()</code></td>
+        <td><code>vec.sort(); vec.dedup();</code></td>
+      </tr>
+      <tr>
+        <td><code>stream.sorted()</code></td>
+        <td><code>vec.sort()</code> or <code>iter.collect::&lt;BTreeSet&gt;()</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The key difference: Java's <code>flatMap</code> takes a function that returns a
+    <code>Stream</code>. Rust's <code>flat_map</code> takes a closure that returns any
+    type that implements <code>IntoIterator</code> — which includes <code>Vec</code>,
+    arrays, ranges, and all the standard iterators like <code>split_whitespace()</code>
+    and <code>match_indices()</code>.
+  </p>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "What is the difference between flat_map() and map() followed by flatten()?",
+    "When would I want a nested Vec&lt;Vec&lt;T&gt;&gt; instead of a flat Vec&lt;T&gt;?",
+    or "What is IntoIterator and why does flat_map accept it?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="appendix-04-ownership-vs-reference.html">← Appendix 4: Ownership vs Reference</a>
+    <a href="0015-multiple-excerpts.html">← Back to Lesson 15</a>
+  </nav>
+
+</div>
+</body>
+</html>

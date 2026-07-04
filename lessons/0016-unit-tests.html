@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 16: Unit Tests</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 16</div>
+    <h1>Unit Tests</h1>
+    <div class="lesson-meta">
+      <span>~20 minutes</span>
+      <span>Hands-on — edit, build, test in your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're building</h2>
+
+  <p>
+    Every time you change the search logic you currently test it by rebuilding, restarting
+    the server, and asking a question. That is slow and easy to forget. This lesson adds
+    automated unit tests for the two pure functions in <code>main.rs</code> —
+    <code>fuzzy_word_match</code> and <code>extract_frontmatter_field</code> — so you can
+    verify their behaviour in seconds with a single command.
+  </p>
+
+  <pre><code>cargo test
+
+running 7 tests
+test tests::frontmatter_field_absent ... ok
+test tests::frontmatter_field_present ... ok
+test tests::frontmatter_no_frontmatter ... ok
+test tests::fuzzy_exact_match ... ok
+test tests::fuzzy_no_match ... ok
+test tests::fuzzy_short_term_requires_exact ... ok
+test tests::fuzzy_typo_within_threshold ... ok
+
+test result: ok. 7 passed; 0 failed</code></pre>
+
+  <h2>New concepts — translated from Java</h2>
+
+  <h3>Concept 1: The test module and #[cfg(test)]</h3>
+
+  <p>
+    In Java, tests live in a separate directory (<code>src/test/java</code>) and are
+    compiled and run by the build tool. In Rust, tests live <em>inside the same file</em>
+    as the code they test, in a dedicated module marked with
+    <a href="https://doc.rust-lang.org/reference/conditional-compilation.html" target="_blank"><code>#[cfg(test)]</code></a>.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java (JUnit)</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>// src/test/java/FuzzyMatchTest.java<br>class FuzzyMatchTest { ... }</code></td>
+        <td><code>// bottom of src/main.rs<br>#[cfg(test)]<br>mod tests { ... }</code></td>
+      </tr>
+      <tr>
+        <td><code>@Test<br>void exactMatch() { ... }</code></td>
+        <td><code>#[test]<br>fn exact_match() { ... }</code></td>
+      </tr>
+      <tr>
+        <td><code>assertEquals(expected, actual)</code></td>
+        <td><code>assert_eq!(expected, actual)</code></td>
+      </tr>
+      <tr>
+        <td><code>assertTrue(condition)</code></td>
+        <td><code>assert!(condition)</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    <code>#[cfg(test)]</code> is a <em>conditional compilation</em> attribute — the entire
+    module is only compiled when you run <code>cargo test</code>. In a normal
+    <code>cargo build</code> the test code does not exist in the binary at all. Java achieves
+    the same separation by putting test code in a different source directory that the
+    production build ignores.
+  </p>
+
+  <h3>Concept 2: use super::*</h3>
+
+  <p>
+    The test module is a child of the main file's module. To call <code>fuzzy_word_match</code>
+    from inside <code>mod tests</code>, you need to bring it into scope. <code>use super::*</code>
+    imports everything from the parent module — <code>super</code> means "one level up", and
+    <code>*</code> means "everything".
+  </p>
+
+  <pre><code>#[cfg(test)]
+mod tests {
+    // Import fuzzy_word_match, extract_frontmatter_field, and everything
+    // else defined in the parent module (main.rs) into this test module
+    use super::*;
+
+    #[test]
+    fn my_test() {
+        // can now call fuzzy_word_match() directly
+    }
+}</code></pre>
+
+  <p>
+    The Java equivalent is that test classes in the same package automatically have access
+    to package-private members. <code>use super::*</code> makes the access explicit.
+  </p>
+
+  <h3>Concept 3: assert! and assert_eq!</h3>
+
+  <p>
+    Both macros panic (fail the test) when the condition is not met.
+    <code>assert_eq!</code> is preferred when comparing two values because it prints
+    both values in the failure message, making it easier to diagnose what went wrong:
+  </p>
+
+  <pre><code>// assert! — checks a boolean condition
+assert!(fuzzy_word_match("reflector guide", "reflector"));
+
+// assert_eq! — checks equality and prints both sides on failure
+// left is conventionally "expected", right is "actual"
+assert_eq!(
+    Some("Reflector Guide".to_string()),  // expected
+    extract_frontmatter_field(content, "title")  // actual
+);
+
+// Failure message from assert_eq!:
+// left:  Some("Reflector Guide")
+// right: None   ← you can see exactly what went wrong</code></pre>
+
+  <h2>Step 1 — Add the test module to main.rs</h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code> and add the following block at the very
+    bottom of the file, after the closing brace of <code>async fn main()</code>:
+  </p>
+
+  <pre><code>#[cfg(test)]
+mod tests {
+    // Bring all functions from main.rs into scope so tests can call them directly
+    use super::*;
+
+    // --- fuzzy_word_match tests ---
+
+    #[test]
+    fn fuzzy_exact_match() {
+        // An exact substring match should always return true
+        assert!(fuzzy_word_match("reflector deployment guide", "reflector"));
+    }
+
+    #[test]
+    fn fuzzy_typo_within_threshold() {
+        // "reflecor" is 1 edit away from "reflector" (missing 't') — within threshold
+        assert!(fuzzy_word_match("reflector deployment guide", "reflecor"));
+    }
+
+    #[test]
+    fn fuzzy_short_term_requires_exact() {
+        // Terms of 3 chars or fewer skip fuzzy matching and need an exact substring match
+        assert!(fuzzy_word_match("kuka amr robot", "amr"));
+        assert!(!fuzzy_word_match("kuka robot", "amr"));
+    }
+
+    #[test]
+    fn fuzzy_no_match() {
+        // A completely unrelated word should not match
+        assert!(!fuzzy_word_match("reflector deployment guide", "hydraulic"));
+    }
+
+    // --- extract_frontmatter_field tests ---
+
+    #[test]
+    fn frontmatter_field_present() {
+        // A valid frontmatter block with the requested field should return Some(value)
+        let content = "---\ntitle: Reflector Guide\ntype: technical-note\n---\n\nBody text.";
+        assert_eq!(
+            extract_frontmatter_field(content, "title"),
+            Some("Reflector Guide".to_string())
+        );
+    }
+
+    #[test]
+    fn frontmatter_field_absent() {
+        // A frontmatter block that does not contain the field should return None
+        let content = "---\ntype: technical-note\n---\n\nBody text.";
+        assert_eq!(extract_frontmatter_field(content, "title"), None);
+    }
+
+    #[test]
+    fn frontmatter_no_frontmatter() {
+        // A file with no frontmatter at all should return None
+        let content = "Just plain text with no frontmatter.";
+        assert_eq!(extract_frontmatter_field(content, "title"), None);
+    }
+}</code></pre>
+
+  <h2>Step 2 — Run the tests</h2>
+
+  <pre><code>cargo test</code></pre>
+
+  <p>
+    All 7 tests should pass. To run only a subset, pass a filter string — cargo runs
+    every test whose name contains the string:
+  </p>
+
+  <pre><code>// Run only the frontmatter tests
+cargo test frontmatter
+
+// Run only the fuzzy tests
+cargo test fuzzy</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Why only test the pure functions?</div>
+    <p>
+      <code>fuzzy_word_match</code> and <code>extract_frontmatter_field</code> are
+      <em>pure functions</em> — they take inputs and return outputs with no side effects
+      and no I/O. Pure functions are trivial to test: no server to start, no files to
+      read, no network involved. The MCP tools (<code>search_docs</code>,
+      <code>list_docs</code>) interact with the filesystem, which requires integration
+      tests. Those are a future lesson.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/book/ch11-01-writing-tests.html" target="_blank">
+        <strong>The Rust Book — Chapter 11: Writing Automated Tests</strong>
+      </a><br>
+      The definitive guide to testing in Rust. Covers unit tests, integration tests,
+      test organisation, and how to test code that should panic. Worth reading in full
+      once you are comfortable with the basics from this lesson.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "How do I test a function that should return an error?",
+    "What is the difference between unit tests and integration tests in Rust?",
+    or "How do I test search_docs without needing real files on disk?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0015-multiple-excerpts.html">← Lesson 15: Multiple Excerpts</a>
+    <a href="0017-configurable-path.html">Lesson 17: Configurable Knowledge Path →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What does #[cfg(test)] on the mod tests block do?",
+    options: [
+      "It marks the module as public so cargo test can discover it from outside the crate",
+      "It runs the module's tests automatically every time cargo build completes",
+      "It excludes the module from normal builds — it is only compiled when running cargo test",
+      "It tells the compiler to optimise the test module for speed rather than binary size"
+    ],
+    correct: 2,
+    explanation: "#[cfg(test)] is a conditional compilation attribute. The entire mod tests block is invisible to cargo build and cargo build --release — it only exists when cargo test compiles the crate. This keeps test code out of production binaries."
+  },
+  {
+    question: "What does use super::* import inside mod tests?",
+    options: [
+      "Everything from the parent module — the functions and types defined above in main.rs",
+      "Everything from the standard library that the parent module has already imported",
+      "The test runner framework — without it, #[test] functions cannot be discovered",
+      "The external crates declared in Cargo.toml that the parent module depends on"
+    ],
+    correct: 0,
+    explanation: "super refers to the parent module — in this case, the top-level code in main.rs. The * glob imports everything from it: fuzzy_word_match, extract_frontmatter_field, and any other items defined there. Without this, the test functions would not be able to call the functions they are testing."
+  },
+  {
+    question: "Why is assert_eq! preferred over assert! when comparing two values?",
+    options: [
+      "assert! panics immediately, while assert_eq! continues running and collects all failures",
+      "assert! only works on boolean expressions; assert_eq! works on any type that implements PartialEq",
+      "assert! cannot compare Option values; assert_eq! handles Some and None automatically",
+      "assert_eq! prints both the expected and actual values when the test fails, making diagnosis easier"
+    ],
+    correct: 3,
+    explanation: "Both macros fail the test on a mismatch. The difference is in the failure message: assert!(a == b) just says 'assertion failed', while assert_eq!(a, b) prints 'left: ...' and 'right: ...' showing you exactly what each value was. This saves significant debugging time."
+  },
+  {
+    question: "How do you run only the tests whose names contain \"frontmatter\"?",
+    options: [
+      "cargo test --filter frontmatter",
+      "cargo test frontmatter",
+      "cargo test --only frontmatter",
+      "cargo test -- --test-filter frontmatter"
+    ],
+    correct: 1,
+    explanation: "cargo test accepts a filter string as a positional argument. It runs every test whose fully-qualified name contains that string. cargo test frontmatter would match tests::frontmatter_field_present, tests::frontmatter_field_absent, and tests::frontmatter_no_frontmatter."
+  }
+]);
+</script>
+</body>
+</html>

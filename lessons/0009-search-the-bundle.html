@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 9: Search the Bundle</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 9</div>
+    <h1>Search the Bundle</h1>
+    <div class="lesson-meta">
+      <span>~25 minutes</span>
+      <span>Hands-on — dev container + AI client</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're building</h2>
+
+  <p>
+    The <code>search_docs</code> tool has returned a stub message since Lesson 5.
+    This lesson replaces it with real search: the tool reads every
+    <code>.md</code> file in <code>knowledge/</code>, finds those whose content
+    matches the query, and returns their titles and source citations.
+  </p>
+
+  <p>
+    By the end, asking your AI client "what are the reflector deployment
+    requirements?" will return results drawn from the actual KUKA documentation.
+  </p>
+
+  <h2>If you know Java: the concepts in this lesson translated</h2>
+
+  <h3>Vec&lt;String&gt; — ArrayList&lt;String&gt;</h3>
+
+  <p>
+    <code>Vec&lt;T&gt;</code> is Rust's growable list — identical in purpose to Java's
+    <code>ArrayList&lt;T&gt;</code>. The syntax for creating one and adding to it:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>List&lt;String&gt; results = new ArrayList&lt;&gt;();</code></td>
+        <td><code>let mut results: Vec&lt;String&gt; = Vec::new();</code></td>
+      </tr>
+      <tr>
+        <td><code>results.add("item");</code></td>
+        <td><code>results.push("item".to_string());</code></td>
+      </tr>
+      <tr>
+        <td><code>String.join("\n\n", results)</code></td>
+        <td><code>results.join("\n\n")</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The key difference from Java: in Rust, <strong>all variables are immutable by default</strong>.
+    You must write <code>let mut</code> to get a variable you can modify. In Java, local
+    variables are mutable by default and you opt into immutability with <code>final</code>.
+    Rust is the opposite — immutable by default, <code>mut</code> to opt in. You cannot
+    call <code>push()</code> on a <code>Vec</code> without <code>mut</code>.
+  </p>
+
+  <h3>std::fs::read_dir — Files.list() from java.nio.file</h3>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Files.list(path)</code> returns <code>Stream&lt;Path&gt;</code></td>
+        <td><code>std::fs::read_dir(path)</code> returns <code>Result&lt;ReadDir&gt;</code></td>
+      </tr>
+      <tr>
+        <td>throws <code>IOException</code> if the directory doesn't exist</td>
+        <td>returns <code>Err(...)</code> if the directory doesn't exist</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>if let Ok(entries) — try-catch as an expression</h3>
+
+  <p>
+    In Java you wrap fallible operations in try-catch. In Rust, <code>if let Ok(value) = expr</code>
+    is the idiomatic way to handle a <code>Result</code> when you want to skip a block on failure
+    rather than propagate the error:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><pre style="margin:0">try {
+  var entries = Files.list(dir);
+  // use entries
+} catch (IOException e) {
+  // skip — no results
+}</pre></td>
+        <td><pre style="margin:0">if let Ok(entries) = read_dir(dir) {
+  // use entries
+}
+// if Err, the block is simply skipped</pre></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>.flatten() — filtering out errors from an iterator</h3>
+
+  <p>
+    <code>read_dir</code> returns an iterator where each item is
+    <code>Result&lt;DirEntry&gt;</code> — it can fail per-file if the OS denies access.
+    <code>.flatten()</code> skips <code>Err</code> values and unwraps <code>Ok</code> ones.
+    The Java stream equivalent:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>stream.filter(Objects::nonNull)</code> (after catching per-item errors)</td>
+        <td><code>iterator.flatten()</code> — drops any <code>Err</code> item silently</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Option::and_then() — Optional.flatMap()</h3>
+
+  <p>
+    <code>path.extension()</code> returns <code>Option&lt;&amp;OsStr&gt;</code> — either
+    <code>Some(extension)</code> or <code>None</code> if the path has no extension.
+    To then convert <code>OsStr</code> to <code>&amp;str</code> (which can also fail), you
+    chain <code>.and_then()</code>:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Optional.ofNullable(ext).flatMap(e -&gt; Optional.ofNullable(e.toStr()))</code></td>
+        <td><code>path.extension().and_then(|e| e.to_str())</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    <code>and_then</code> on <code>Option</code> is identical to <code>flatMap</code> on
+    <code>Optional</code>: apply the closure if <code>Some</code>, return <code>None</code>
+    if either the original or the closure is <code>None</code>.
+    <a href="https://doc.rust-lang.org/std/option/enum.Option.html#method.and_then" target="_blank">[Option::and_then — docs]</a>
+  </p>
+
+  <h3>Closures |e| e.to_str() — lambda expressions</h3>
+
+  <p>
+    Rust closures use <code>|param| body</code> syntax. Java lambdas use <code>param -&gt; body</code>.
+    They are the same concept — anonymous functions passed as arguments:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java lambda</th><th>Rust closure</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>e -&gt; e.toString()</code></td>
+        <td><code>|e| e.to_str()</code></td>
+      </tr>
+      <tr>
+        <td><code>(a, b) -&gt; a + b</code></td>
+        <td><code>|a, b| a + b</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>New concepts: reading a directory</h2>
+
+  <h3>std::fs::read_dir</h3>
+
+  <p>
+    <code>std::fs::read_dir(path)</code> returns an iterator over the entries in
+    a directory. Each entry is a <code>Result&lt;DirEntry&gt;</code> — it can
+    fail if the OS denies access to an individual file. You handle this with
+    <a href="https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.flatten" target="_blank"><code>.flatten()</code></a>,
+    which silently skips any <code>Err</code> entries and unwraps the
+    <code>Ok</code> ones:
+  </p>
+
+  <pre><code>for entry in std::fs::read_dir("knowledge").flatten() {
+    // entry is a DirEntry — errors are skipped
+}</code></pre>
+
+  <h3>Filtering by extension</h3>
+
+  <p>
+    <code>path.extension()</code> returns <code>Option&lt;&OsStr&gt;</code>.
+    You chain <code>.and_then()</code> to convert it to <code>Option&lt;&str&gt;</code>
+    and then compare:
+  </p>
+
+  <pre><code>if path.extension().and_then(|e| e.to_str()) != Some("md") {
+    continue; // skip non-markdown files
+}</code></pre>
+
+  <p>
+    <code>and_then</code> on an <code>Option</code> applies a closure if the
+    value is <code>Some</code>, returning <code>None</code> if either the
+    original or the closure returns <code>None</code>.
+    <a href="https://doc.rust-lang.org/std/option/enum.Option.html#method.and_then" target="_blank">[Option::and_then — docs]</a>
+  </p>
+
+  <h2>Step 1 — Add a frontmatter helper</h2>
+
+  <p>
+    Add this free function above the <code>struct KukaServer</code> definition
+    in <code>src/main.rs</code>. It extracts a single field from OKF frontmatter
+    using only the standard library — no YAML crate needed.
+  </p>
+
+  <pre><code>fn extract_frontmatter_field(content: &str, field: &str) -> Option&lt;String&gt; {
+    let inner = content.strip_prefix("---\n")?.split_once("\n---")?.0;
+    for line in inner.lines() {
+        if let Some(value) = line.strip_prefix(&format!("{field}: ")) {
+            return Some(value.trim().to_string());
+        }
+    }
+    None
+}</code></pre>
+
+  <p>
+    <code>strip_prefix("---\n")?</code> returns <code>None</code> (aborting the
+    function) if the file doesn't start with a frontmatter fence.
+    <code>split_once("\n---")</code> splits on the closing fence and takes
+    the part before it. The loop then scans each line for the requested field.
+  </p>
+
+  <h2>Step 2 — Replace the search_docs stub</h2>
+
+  <p>
+    Replace the entire <code>search_docs</code> method inside the
+    <code>#[tool_router] impl KukaServer</code> block:
+  </p>
+
+  <pre><code>#[tool(description = "Search KUKA robot documentation for a given query")]
+fn search_docs(
+    &self,
+    Parameters(input): Parameters&lt;SearchInput&gt;,
+) -> Result&lt;CallToolResult, McpError&gt; {
+    let knowledge_dir = std::path::Path::new("knowledge");
+    let query = input.query.to_lowercase();
+    let mut results: Vec&lt;String&gt; = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(knowledge_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if content.to_lowercase().contains(&query) {
+                    let title = extract_frontmatter_field(&content, "title")
+                        .unwrap_or_else(|| {
+                            path.file_stem().unwrap().to_string_lossy().to_string()
+                        });
+                    let resource = extract_frontmatter_field(&content, "resource")
+                        .unwrap_or_default();
+                    results.push(format!("• {title}\n  Source: {resource}"));
+                }
+            }
+        }
+    }
+
+    let text = if results.is_empty() {
+        format!("No results found for '{}'.", input.query)
+    } else {
+        format!(
+            "Found {} result(s) for '{}':\n\n{}",
+            results.len(),
+            input.query,
+            results.join("\n\n")
+        )
+    };
+
+    Ok(CallToolResult::success(vec![Content::text(text)]))
+}</code></pre>
+
+  <h3>Walking through the code</h3>
+
+  <p>
+    <code>let mut results: Vec&lt;String&gt; = Vec::new()</code> creates an empty,
+    growable list of strings. The <code>mut</code> is required because
+    <code>push</code> modifies it.
+  </p>
+
+  <p>
+    <code>if let Ok(entries) = std::fs::read_dir(...)</code> gracefully handles a
+    missing <code>knowledge/</code> directory — if the path doesn't exist the
+    whole block is skipped and the tool returns "No results found."
+  </p>
+
+  <p>
+    <code>results.join("\n\n")</code> concatenates the result strings with a
+    blank line between each one, producing readable output for the AI client.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Working directory note</div>
+    <p>
+      <code>Path::new("knowledge")</code> is relative to the server's working
+      directory. When Copilot or Claude Code launches the binary, the working
+      directory is the workspace root <code>/workspaces/MCP-Rust/</code>, so
+      <code>knowledge/</code> resolves correctly. If you get "No results found"
+      on a query that should match, run <code>pwd</code> in the terminal where
+      the server starts to confirm the working directory.
+    </p>
+  </div>
+
+  <h2>Step 3 — Build</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <h2>Step 4 — Test with your AI client</h2>
+
+  <p>
+    In Copilot Agent mode (or Claude Code), ask a question whose answer is in
+    the knowledge bundle:
+  </p>
+
+  <pre><code>What are the reflector deployment requirements for KUKA AMR robots?</code></pre>
+
+  <p>
+    You should see the tool-use block appear:
+  </p>
+
+  <pre><code>Ran search_docs — kuka (MCP Server)
+Input:  {"query": "reflector deployment requirements"}
+Output: Found 2 result(s) for 'reflector deployment requirements':
+
+• Reflector Deployment Guide
+  Source: kuka-docs/KUKA Technical Note -Reflector Deployment- V1.0.1.pdf
+
+• KUKA Technical Note -Reflector Deployment- V1.0.1
+  Source: kuka-docs/KUKA Technical Note -Reflector Deployment- V1.0.1.pdf</code></pre>
+
+  <p>
+    The AI client then uses those results — including the source citation — to
+    compose its answer. That citation is the <code>resource</code> field from the
+    OKF frontmatter you wrote in Lesson 7.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">What you just shipped</div>
+    <p>
+      A working Rust MCP server that answers questions about KUKA robots from
+      real documentation. The pipeline is complete: PDF → OKF file → search →
+      AI response with citation. Everything from here is refinement.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/std/fs/fn.read_dir.html" target="_blank">
+        <strong>std::fs::read_dir — Rust standard library docs</strong>
+      </a><br>
+      The reference for directory iteration in Rust. Pay attention to the
+      <code>DirEntry</code> methods — <code>path()</code>, <code>file_name()</code>,
+      and <code>metadata()</code> are the ones you will reach for when extending
+      the extractor in later lessons.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "How would I score results by relevance instead of just matching?",
+    "What happens if two files match — does the order matter?",
+    or "How do I make the search return a snippet of the matching text?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0008-pdf-extraction.html">← Lesson 8: PDF Extraction</a>
+    <a href="0010-search-excerpts.html">Lesson 10: Search Excerpts →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What does .flatten() do when iterating the results of read_dir?",
+    options: [
+      "It converts each DirEntry into a flat list of bytes",
+      "It silently skips Err entries and unwraps Ok ones",
+      "It sorts directory entries alphabetically before iteration",
+      "It recursively enters subdirectories during iteration"
+    ],
+    correct: 1,
+    explanation: "flatten() on an iterator of Result<T> skips any Err values and unwraps the Ok values — a clean way to ignore individual file errors without crashing the whole loop."
+  },
+  {
+    question: "Why does the search use content.to_lowercase().contains(&query) rather than content.contains(&query)?",
+    options: [
+      "contains() only works on lowercase strings in Rust's standard library",
+      "Rust string comparison is case-sensitive by default, so lowercasing both sides makes the search case-insensitive",
+      "to_lowercase() is required before any string method can be called on file contents",
+      "The OKF format requires all content to be stored in lowercase"
+    ],
+    correct: 1,
+    explanation: "Rust's contains() is case-sensitive. Lowercasing both the content and the query before comparing means 'Reflector' matches a search for 'reflector' — which is what users expect."
+  },
+  {
+    question: "What does strip_prefix() return if the string does not start with the given prefix?",
+    options: [
+      "An empty string",
+      "The original string unchanged",
+      "None",
+      "A compile-time error"
+    ],
+    correct: 2,
+    explanation: "strip_prefix() returns Option<&str>. It returns Some(&str) if the prefix matched (with the prefix removed), or None if it did not. The ? in the helper function propagates None up, aborting early if the file has no frontmatter."
+  },
+  {
+    question: "Why is the knowledge/ path relative rather than absolute in the server code?",
+    options: [
+      "Absolute paths are not allowed in Rust's std::path module",
+      "The rmcp framework requires all file paths to be relative",
+      "Relative paths make the server portable across machines and container rebuilds",
+      "The OKF spec requires the resource field to use relative paths"
+    ],
+    correct: 2,
+    explanation: "A relative path like 'knowledge/' works on any machine where the working directory is the workspace root. An absolute path like '/workspaces/MCP-Rust/knowledge/' would break if the project moved or was cloned elsewhere."
+  }
+]);
+</script>
+</body>
+</html>

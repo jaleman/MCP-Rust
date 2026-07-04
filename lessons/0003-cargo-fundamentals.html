@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 3: Cargo Fundamentals</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 3</div>
+    <h1>Cargo Fundamentals</h1>
+    <div class="lesson-meta">
+      <span>~15 minutes</span>
+      <span>Hands-on — run these commands inside your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're doing and why</h2>
+
+  <p>
+    Your dev container is running. Now you need a <em>Rust project</em> inside it — a
+    directory structure with source files and a manifest that tells Rust how to build them.
+    In Rust, the tool that creates, builds, and manages dependencies for a project is called
+    <strong>Cargo</strong>. By the end of this lesson you will have:
+  </p>
+
+  <ul>
+    <li>A Cargo project called <code>mcp-server</code></li>
+    <li><code>rmcp</code> — the official Rust MCP SDK — added as a dependency</li>
+    <li>A successful <code>cargo build</code> that downloads and compiles everything</li>
+  </ul>
+
+  <p>
+    This is the foundation everything else is built on. Once this compiles cleanly, you're
+    ready to start writing the actual server code.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Before you start</div>
+    Open your dev container in VS Code (Command Palette → <strong>Dev Containers: Reopen in Container</strong>),
+    then open a terminal inside it (<code>Ctrl+`</code>). All commands below run inside the container,
+    not on Windows. Check you're in the right place with <code>pwd</code> — you should see
+    <code>/workspaces/MCP-Rust</code> or similar.
+  </div>
+
+  <h2>What Cargo is</h2>
+
+  <p>
+    Cargo is Rust's build system and package manager — it does the job that
+    <code>npm</code>, <code>pip</code>, or <code>Maven</code> do in other ecosystems.
+    Every Rust project has a file called <code>Cargo.toml</code> at its root.
+    That file is the single source of truth for:
+  </p>
+
+  <ul>
+    <li>Your project's name, version, and Rust edition</li>
+    <li>Which external libraries (called <em>crates</em>) your code depends on</li>
+    <li>Optional build configuration</li>
+  </ul>
+
+  <p>
+    When you run <code>cargo build</code>, Cargo reads <code>Cargo.toml</code>, downloads any
+    missing crates from <a href="https://crates.io" target="_blank">crates.io</a> (Rust's
+    package registry), and compiles everything.
+    <a href="https://doc.rust-lang.org/cargo/guide/why-cargo-exists.html" target="_blank">[Why Cargo exists — Cargo Book]</a>
+  </p>
+
+  <h2>If you know Java: Cargo = Maven + Gradle in one tool</h2>
+
+  <p>
+    You already know the problem Cargo solves — managing dependencies and building code.
+    In Java you likely use Maven or Gradle. Cargo is Rust's equivalent, but it is the
+    only tool: there is no ecosystem split, no plugins to choose between. Every Rust
+    project uses Cargo.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java / Maven</th><th>Rust / Cargo</th></tr></thead>
+    <tbody>
+      <tr><td><code>pom.xml</code></td><td><code>Cargo.toml</code> — project metadata + dependencies in one file</td></tr>
+      <tr><td>Maven Central</td><td><a href="https://crates.io" target="_blank">crates.io</a> — the single public package registry</td></tr>
+      <tr><td>JAR artifact / library</td><td><em>crate</em> — Rust's name for a compiled package</td></tr>
+      <tr><td><code>mvn dependency:resolve</code> (edits pom.xml manually)</td><td><code>cargo add rmcp</code> — looks up the latest version and writes it into Cargo.toml automatically</td></tr>
+      <tr><td><code>mvn compile</code></td><td><code>cargo build</code></td></tr>
+      <tr><td><code>mvn exec:java -Dmainclass=...</code></td><td><code>cargo run</code></td></tr>
+      <tr><td>No native equivalent (closest: Gradle lock files)</td><td><code>Cargo.lock</code> — exact resolved versions of every transitive dependency; commit this to git</td></tr>
+      <tr><td>Maven optional dependencies / profiles</td><td><em>features</em> — named optional chunks of a crate you opt into with <code>--features</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    The one concept with no clean Java analogy is <strong>features</strong>. In Maven,
+    you either depend on a JAR or you don't. In Rust, a crate can be split into optional
+    pieces — you only compile (and pay the build-time cost for) what you actually use.
+    <code>rmcp</code>'s procedural macros are an optional feature; you activate them with
+    <code>--features macros</code> so projects that don't need them don't pay for them.
+  </p>
+
+  <h2>Step 1: Create the project</h2>
+
+  <p>Run this inside your dev container terminal:</p>
+
+  <pre><code>cargo new mcp-server --bin</code></pre>
+
+  <p>
+    The <code>--bin</code> flag means "I want an executable program" (as opposed to a library).
+    Cargo creates a directory called <code>mcp-server/</code> with this layout:
+  </p>
+
+  <div class="diagram">
+mcp-server/<br>
+├── Cargo.toml    ← project manifest<br>
+└── src/<br>
+&nbsp;&nbsp;&nbsp;&nbsp;└── main.rs   ← your program's entry point
+  </div>
+
+  <p>
+    Move into that directory:
+  </p>
+
+  <pre><code>cd mcp-server</code></pre>
+
+  <h2>Step 2: Read Cargo.toml</h2>
+
+  <p>Open <code>Cargo.toml</code>. It will look like this:</p>
+
+  <pre><code>[package]
+name = "mcp-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+</code></pre>
+
+  <p>There are exactly two sections right now:</p>
+
+  <ul>
+    <li>
+      <strong><code>[package]</code></strong> — project metadata. The <code>name</code> becomes
+      the name of your compiled binary. <code>edition = "2024"</code> means you're using the
+      2024 version of the Rust language (the current standard, stable since Rust 1.85).
+    </li>
+    <li>
+      <strong><code>[dependencies]</code></strong> — empty for now. Every external crate you add
+      will appear here as a name/version pair.
+    </li>
+  </ul>
+
+  <p>
+    And <code>src/main.rs</code> contains the canonical "Hello, world!" to prove it compiles:
+  </p>
+
+  <pre><code>fn main() {
+    println!("Hello, world!");
+}</code></pre>
+
+  <p>Verify it works before touching anything:</p>
+
+  <pre><code>cargo run</code></pre>
+
+  <p>
+    You should see <code>Hello, world!</code> printed. Cargo compiled the binary and ran it.
+    First run takes a moment because Cargo builds the standard library toolchain — subsequent
+    builds are faster.
+  </p>
+
+  <h2>Step 3: Add rmcp</h2>
+
+  <p>
+    <code>rmcp</code> is the official Rust SDK for the Model Context Protocol — the library
+    that handles all the JSON-RPC plumbing of MCP so you don't have to.
+    <a href="https://docs.rs/rmcp" target="_blank">[rmcp on docs.rs]</a>
+    <a href="https://github.com/modelcontextprotocol/rust-sdk" target="_blank">[rust-sdk on GitHub]</a>
+  </p>
+
+  <p>Add it with one command:</p>
+
+  <pre><code>cargo add rmcp --features macros</code></pre>
+
+  <p>
+    <code>cargo add</code> looks up the latest version of <code>rmcp</code> on crates.io and
+    writes it into your <code>Cargo.toml</code> automatically — you never edit the version
+    number by hand.
+    The <code>--features macros</code> part enables a set of optional helpers inside <code>rmcp</code>
+    that make defining tools much less verbose. You'll see them in action in the next lesson.
+  </p>
+
+  <p>Open <code>Cargo.toml</code> again — it now looks like:</p>
+
+  <pre><code>[package]
+name = "mcp-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rmcp = { version = "x.y.z", features = ["macros"] }
+</code></pre>
+
+  <p>
+    The <code>x.y.z</code> will be the current version Cargo resolved. The <code>features</code>
+    key tells Cargo which optional parts of <code>rmcp</code> to compile in.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">What are features?</div>
+    Many Rust crates are split into optional pieces called <em>features</em>. This keeps compile
+    times short — you only pay for what you use. <code>rmcp</code> ships its procedural macros
+    as an optional feature rather than always compiling them in.
+    <a href="https://doc.rust-lang.org/cargo/reference/features.html" target="_blank">[Cargo features — Cargo Book]</a>
+  </div>
+
+  <h2>Step 4: Build to verify</h2>
+
+  <p>
+    Run a full build. This will download <code>rmcp</code> and all of <em>its</em> dependencies
+    (including Tokio, the async runtime) and compile everything:
+  </p>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    The first run after adding a new dependency always takes longer — Cargo is compiling the
+    dependency tree from scratch. You'll see a stream of <code>Compiling ...</code> lines.
+    When it ends with <code>Finished dev [unoptimized + debuginfo]</code>, you're done.
+    No errors means your project correctly references rmcp and everything compiles.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">cargo build vs cargo run</div>
+    <code>cargo build</code> compiles but does not execute the binary. Use it to check that
+    your code is correct without running anything. <code>cargo run</code> compiles <em>and</em>
+    then runs the resulting binary. When writing a server you'll usually use <code>cargo build</code>
+    to catch errors early, then <code>cargo run</code> to start the server.
+  </div>
+
+  <p>
+    One more file appeared: <code>Cargo.lock</code>. This is Cargo's record of the exact
+    version of every dependency (and every dependency <em>of</em> those dependencies) that was
+    resolved. You never edit it — Cargo manages it. Commit it to version control so that
+    everyone (including future-you) builds against identical versions.
+    <a href="https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html" target="_blank">[Cargo.toml vs Cargo.lock — Cargo Book]</a>
+  </p>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz">
+    <div class="quiz-title">Retrieval practice — 4 questions</div>
+  </div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/cargo/guide/" target="_blank">
+        <strong>The Cargo Book — Guide</strong>
+      </a><br>
+      The authoritative reference for Cargo. Read "Creating a New Package" and "Dependencies"
+      now. The rest is reference material you'll return to as questions arise.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask your teacher directly — paste any error message or
+    confusing output and ask Claude to explain it. Common gotchas: being outside the dev
+    container when running commands, or <code>cargo add</code> not being found (run
+    <code>cargo --version</code> to confirm Cargo 1.62+ is installed).
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0002-devcontainer-setup.html">← Lesson 2: Dev Container Setup</a>
+    <a href="0004-first-mcp-server.html">Lesson 4: Your First MCP Server →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: 'What does `cargo new mcp-server --bin` create?',
+    options: [
+      'A library crate with no entry point',
+      'A binary crate with src/main.rs',
+      'A workspace containing multiple crates',
+      'A new entry inside an existing Cargo.toml'
+    ],
+    correct: 1,
+    explanation: '--bin creates an executable. Cargo generates src/main.rs with fn main() as the entry point. Without --bin you get a library crate with src/lib.rs instead.'
+  },
+  {
+    question: 'Which section of Cargo.toml lists external crates your project depends on?',
+    options: [
+      '[package]',
+      '[features]',
+      '[dependencies]',
+      '[workspace]'
+    ],
+    correct: 2,
+    explanation: '[package] holds project metadata (name, version, edition). [dependencies] is where external crates appear — one line per crate, specifying the version.'
+  },
+  {
+    question: 'After running `cargo add rmcp`, where does rmcp appear?',
+    options: [
+      'src/main.rs as a use statement',
+      'Cargo.toml under [dependencies]',
+      'Cargo.lock as a resolved hash',
+      '.cargo/config.toml as a registry'
+    ],
+    correct: 1,
+    explanation: 'cargo add edits Cargo.toml for you — you never have to look up version numbers manually. Cargo.lock is updated automatically on the next build.'
+  },
+  {
+    question: '`cargo build` compiles the project. What does it NOT do?',
+    options: [
+      'Download missing crates from crates.io',
+      'Write the compiled binary to target/debug/',
+      'Execute the compiled binary afterward',
+      'Update Cargo.lock with resolved versions'
+    ],
+    correct: 2,
+    explanation: 'cargo build stops after producing the binary. To compile and run in one step, use cargo run. For a server you will usually separate these: build to check, run to start.'
+  }
+]);
+</script>
+</body>
+</html>

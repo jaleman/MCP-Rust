@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 21 — UTF-8 Char Boundaries</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 21</div>
+    <h1>UTF-8 Char Boundaries: Why Your Search Hung</h1>
+    <div class="lesson-meta">
+      <span>~20 min</span>
+      <span>Real bug, real fix</span>
+      <span>Prerequisite: <a href="0010-search-excerpts.html">Lesson 10</a></span>
+    </div>
+  </header>
+
+  <p>
+    Your MCP server hung silently when queried with <code>"mission payload"</code>. Single-term
+    queries worked fine. Multi-term queries against the MQTT Payload Definitions document caused
+    the server process to crash — no error message, no response, just silence.
+  </p>
+  <p>
+    The culprit: Rust string slicing panicked mid-document. This lesson explains exactly why,
+    and introduces the two-line pattern that prevents it everywhere.
+  </p>
+
+  <h2>Java vs Rust: how strings are stored</h2>
+
+  <p>In Java, a <code>String</code> is a sequence of UTF-16 <em>char units</em>.
+  <code>substring(10, 50)</code> counts in those units, and the API always keeps you on a
+  valid boundary. You never think about bytes.</p>
+
+  <p>In Rust, a <code>&amp;str</code> is a sequence of <em>bytes</em> that is guaranteed to be
+  valid UTF-8. When you write <code>&amp;s[10..50]</code>, those are <strong>byte positions</strong>,
+  not character counts. If either position falls in the middle of a multi-byte character,
+  Rust <strong>panics immediately</strong> rather than return garbled data.</p>
+
+  <div class="callout">
+    <div class="callout-label">Key distinction</div>
+    Java counts characters. Rust counts bytes. Slicing at a bad byte position is a panic, not a bug that silently corrupts output.
+  </div>
+
+  <h2>UTF-8 encoding in 30 seconds</h2>
+
+  <p>Every Unicode character encodes to 1–4 bytes in UTF-8. The number of bytes depends on the
+  codepoint value:</p>
+
+  <div class="diagram">
+U+0000 – U+007F → 1 byte  (all ASCII — 0xxxxxxx)<br>
+U+0080 – U+07FF → 2 bytes (110xxxxx 10xxxxxx)<br>
+U+0800 – U+FFFF → 3 bytes (1110xxxx 10xxxxxx 10xxxxxx)<br>
+U+10000 – U+10FFFF → 4 bytes (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
+  </div>
+
+  <p>The bytes starting with <code>10xxxxxx</code> (values <code>0x80</code>–<code>0xBF</code>)
+  are <strong>continuation bytes</strong> — they are the 2nd, 3rd, or 4th byte of a multi-byte
+  sequence. A <em>char boundary</em> is any position that is <em>not</em> a continuation byte
+  (or is the end of the string). Only char boundaries are safe to slice at.</p>
+
+  <h3>The characters that broke your server</h3>
+
+  <p>The MQTT Payload Definitions PDF was typeset with smart quotes: <code>"</code> and
+  <code>"</code> (U+201C and U+201D). Both encode to 3 bytes: <code>E2 80 9C</code> and
+  <code>E2 80 9D</code>. Bytes <code>80</code> and <code>9C</code>/<code>9D</code> are
+  continuation bytes — not char boundaries.</p>
+
+  <div class="diagram">
+  Position:  …  3989  3990  3991  3992 …<br>
+  Byte:      …  0xE2  0x80  0x9C  0x22 …<br>
+  Role:      … [start  cont  cont] [ASCII] …<br>
+  Boundary?  …  YES    NO    NO   YES   …
+  </div>
+
+  <p>The proximity scoring code computes a <code>±500 byte window</code> around each match.
+  For <code>pos=10365</code> ("payload"), <code>win_end = 10365 + 500 = 10865</code> — which
+  fell exactly on a continuation byte. <code>&amp;lower[win_start..10865]</code> panicked.
+  The async task crashed. The MCP tool call never returned.</p>
+
+  <h2>Detecting a char boundary</h2>
+
+  <p>Rust gives you one method: <code>str::is_char_boundary(i)</code>. It returns
+  <code>true</code> if byte position <code>i</code> is safe to use as a slice start or end.</p>
+
+<pre><code>let s = "Say \u{201C}hello\u{201D}";  // "Say "hello""
+//  bytes:  S  a  y  _  E2 80 9C h  e  l  l  o  E2 80 9D
+//  index:  0  1  2  3   4  5  6  7  8  9 10 11  12 13 14
+
+assert!( s.is_char_boundary(0));  // start of string — always true
+assert!( s.is_char_boundary(4));  // start of the " character — true
+assert!(!s.is_char_boundary(5));  // continuation byte 0x80 — false → PANIC if sliced
+assert!(!s.is_char_boundary(6));  // continuation byte 0x9C — false → PANIC if sliced
+assert!( s.is_char_boundary(7));  // start of 'h' — true</code></pre>
+
+  <h2>The fix: two tiny helper functions</h2>
+
+  <p>When you compute a window or excerpt boundary with arithmetic (<code>pos - 150</code>,
+  <code>pos + 500</code>), that arithmetic is blind to character structure. The result might
+  land on a continuation byte.</p>
+
+  <p>The fix is to snap the computed position to the nearest safe boundary before slicing:
+  walk <em>backwards</em> to find the start of the character that spans your target
+  (<code>floor</code>), or walk <em>forwards</em> to find the start of the next character
+  (<code>ceil</code>).</p>
+
+<pre><code>// Snap DOWN to the nearest char boundary ≤ pos.
+// Used for slice *starts* — never cut into a character from the left.
+fn floor_char_boundary(s: &str, pos: usize) -> usize {
+    let pos = pos.min(s.len());
+    // Walk backwards from pos until we hit a boundary.
+    // At most 3 steps — UTF-8 sequences are at most 4 bytes long.
+    (0..=pos).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0)
+}
+
+// Snap UP to the nearest char boundary ≥ pos.
+// Used for slice *ends* — never cut into a character from the right.
+fn ceil_char_boundary(s: &str, pos: usize) -> usize {
+    // Walk forwards from pos until we hit a boundary.
+    (pos..=s.len()).find(|&i| s.is_char_boundary(i)).unwrap_or(s.len())
+}</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Java analogy</div>
+    <code>floor_char_boundary</code> is like <code>Character.offsetByCodePoints(s, pos, 0)</code>
+    adjusted leftward — find the codepoint that owns this position.
+    There is no exact Java equivalent because Java never exposes raw byte positions.
+  </div>
+
+  <p>Both functions are effectively O(1): UTF-8 sequences are at most 4 bytes, so at most 3
+  steps of walking.</p>
+
+  <h2>Applying the fix</h2>
+
+  <p>Two places in <code>main.rs</code> computed slice boundaries with raw arithmetic.
+  Both need the helpers.</p>
+
+  <h3>Before — proximity window (panics)</h3>
+<pre><code>let win_start = pos.saturating_sub(window_size).max(body_start);
+let win_end   = (pos + window_size).min(lower.len());
+let window    = &amp;lower[win_start..win_end]; // PANIC if boundary is bad</code></pre>
+
+  <h3>After — proximity window (safe)</h3>
+<pre><code>// floor/ceil snap to nearest valid UTF-8 char boundary before slicing
+let win_start = floor_char_boundary(&amp;lower, pos.saturating_sub(window_size).max(body_start));
+let win_end   = ceil_char_boundary(&amp;lower,  (pos + window_size).min(lower.len()));
+let window    = &amp;lower[win_start..win_end]; // always safe</code></pre>
+
+  <h3>Before — excerpt (would panic on other documents)</h3>
+<pre><code>let start = pos.saturating_sub(150).max(body_start);
+let end   = (pos + 300).min(content.len());
+excerpts.push(content[start..end].trim()); // potential PANIC</code></pre>
+
+  <h3>After — excerpt (safe)</h3>
+<pre><code>let start = floor_char_boundary(&amp;content, pos.saturating_sub(150).max(body_start));
+let end   = ceil_char_boundary(&amp;content,  (pos + 300).min(content.len()));
+excerpts.push(content[start..end].trim()); // always safe</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Rule of thumb</div>
+    Any time you compute a slice position with arithmetic on a <code>&amp;str</code> —
+    subtract, add, clamp — snap it through <code>floor_char_boundary</code> or
+    <code>ceil_char_boundary</code> before you use it. Never assume arithmetic lands on a boundary.
+  </div>
+
+  <h2>Why only multi-term queries triggered it</h2>
+
+  <p>Single-term queries ("mission" alone) return results too. But the server only builds
+  the <em>proximity scoring window</em> when a document matches <strong>all</strong> query
+  terms. With "mission" only, the MQTT doc matches but the window arithmetic happens
+  to stay clear of the bad boundaries. With "mission payload", the scoring passes through
+  <code>pos=10365</code> and <code>pos=15574</code>, which both produce window boundaries on
+  continuation bytes.</p>
+
+  <p>This is a common class of Rust bug: code that works on ASCII-only data fails silently
+  (or loudly, with a panic) as soon as real-world text with accents, curly quotes, or
+  emoji appears.</p>
+
+  <!-- Quiz -->
+  <div class="quiz" id="quiz">
+    <div class="quiz-title">Check your understanding</div>
+
+    <!-- Q1 — correct at index 2 -->
+    <div class="quiz-question" id="q1">
+      <p>The byte at position 42 in a Rust <code>&amp;str</code> is <code>0x80</code>. What happens if you write <code>&amp;s[42..50]</code>?</p>
+      <ul class="quiz-options">
+        <li><button onclick="answer(this,'q1',false)">It returns the bytes from 42 to 50, ignoring the encoding</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q1',false)">It silently returns a replacement character (U+FFFD) at position 42</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q1',true)">It panics at runtime, because 0x80 is a continuation byte, not a char boundary</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q1',false)">It returns an empty string, because the position is invalid</button><div class="quiz-feedback"></div></li>
+      </ul>
+    </div>
+
+    <!-- Q2 — correct at index 0 -->
+    <div class="quiz-question" id="q2">
+      <p>Which byte values are always valid UTF-8 char boundaries (i.e., <code>is_char_boundary</code> returns <code>true</code>)?</p>
+      <ul class="quiz-options">
+        <li><button onclick="answer(this,'q2',true)">0x00–0x7F (ASCII) and 0xC0–0xFF (multi-byte start bytes), plus the end-of-string position</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q2',false)">0x80–0xBF (continuation bytes) — they mark where characters begin inside a sequence</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q2',false)">All even byte positions — UTF-8 characters always start on even offsets</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q2',false)">Any position where the byte value is less than 0xF0, excluding zero</button><div class="quiz-feedback"></div></li>
+      </ul>
+    </div>
+
+    <!-- Q3 — correct at index 1 -->
+    <div class="quiz-question" id="q3">
+      <p>You compute <code>end = pos + 300</code> as a slice end. Which helper should you use and why?</p>
+      <ul class="quiz-options">
+        <li><button onclick="answer(this,'q3',false)"><code>floor_char_boundary</code> — walk backwards to not cut a character at the end</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q3',true)"><code>ceil_char_boundary</code> — walk forwards so the end falls after any character that spans the boundary</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q3',false)"><code>floor_char_boundary</code> — end positions always need to snap downward</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q3',false)">Neither — end positions are always safe because arithmetic can't overshoot</button><div class="quiz-feedback"></div></li>
+      </ul>
+    </div>
+
+    <!-- Q4 — correct at index 3 -->
+    <div class="quiz-question" id="q4">
+      <p>In Rust, why did this bug only surface on the MQTT Payload Definitions document and not on the other 8 documents in the bundle?</p>
+      <ul class="quiz-options">
+        <li><button onclick="answer(this,'q4',false)">The other documents are smaller, so the window arithmetic always stays below position 127</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q4',false)">The other documents use a different text encoding that Rust handles safely by default</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q4',false)">The MQTT document has more stop words, causing a different code path to run</button><div class="quiz-feedback"></div></li>
+        <li><button onclick="answer(this,'q4',true)">The other documents contain only ASCII characters; the MQTT document has UTF-8 smart quotes extracted from the PDF</button><div class="quiz-feedback"></div></li>
+      </ul>
+    </div>
+
+    <div class="quiz-score" id="quiz-score"></div>
+  </div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <strong><a href="https://doc.rust-lang.org/std/primitive.str.html#method.is_char_boundary">std::str::is_char_boundary</a></strong>
+      — the standard library documentation explains exactly which positions are valid boundaries
+      and why. Read the "Panics" section of
+      <a href="https://doc.rust-lang.org/std/primitive.str.html#indexing">string indexing</a>
+      for the full contract.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Have a question?</strong> Ask your teacher agent — type your question in the chat
+    and it will explain, show another example, or dig deeper into any part of this lesson.
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0020-batch-extraction.html">← Lesson 20: Batch Extraction</a>
+    <a href="0022-clap-cli-arguments.html">Lesson 22: clap CLI Arguments →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+// Track answers across all questions for the final score
+const total = 4;
+let answered = 0;
+let correct = 0;
+
+function answer(btn, qid, isCorrect) {
+  const question = document.getElementById(qid);
+  const buttons = question.querySelectorAll('button');
+  // Disable all buttons for this question
+  buttons.forEach(b => b.disabled = true);
+  const feedback = btn.nextElementSibling;
+  if (isCorrect) {
+    btn.classList.add('correct');
+    feedback.textContent = 'Correct.';
+    correct++;
+  } else {
+    btn.classList.add('incorrect');
+    feedback.textContent = 'Not quite — try to recall the rule before reading the explanation above.';
+    // Highlight the correct button
+    buttons.forEach(b => {
+      if (b.onclick.toString().includes('true')) b.classList.add('correct');
+    });
+  }
+  answered++;
+  if (answered === total) {
+    const scoreEl = document.getElementById('quiz-score');
+    scoreEl.style.display = 'block';
+    scoreEl.textContent = `Score: ${correct} / ${total}`;
+  }
+}
+</script>
+</body>
+</html>

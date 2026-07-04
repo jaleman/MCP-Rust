@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 15: Multiple Excerpts</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 15</div>
+    <h1>Multiple Excerpts</h1>
+    <div class="lesson-meta">
+      <span>~20 minutes</span>
+      <span>Hands-on — edit, build, test in your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're fixing</h2>
+
+  <p>
+    Right now <code>search_docs</code> returns one excerpt per document — the window around
+    the first match. If the Reflector Deployment Guide mentions "height" in five different
+    sections, Claude only sees the first one. The other four are invisible.
+  </p>
+
+  <p>
+    This lesson changes the tool to return <strong>up to three non-overlapping excerpts</strong>
+    per document, one for each distinct region where query terms appear.
+  </p>
+
+  <div class="diagram">
+    Before: one excerpt per document (first match only)<br><br>
+    After:&nbsp; • Reflector Deployment Guide<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;...Reflectors must be mounted at a height of 150–2000 mm...<br><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;...The maximum height above floor level is 2000 mm...<br><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;...Height tolerances apply when using angled mounting brackets...
+  </div>
+
+  <h2>New concepts — translated from Java</h2>
+
+  <h3>Concept 1: match_indices() — finding all occurrences at once</h3>
+
+  <p>
+    Until now you used <code>str::find()</code>, which returns the position of the
+    <em>first</em> match only. To find every occurrence you need
+    <a href="https://doc.rust-lang.org/std/primitive.str.html#method.match_indices" target="_blank"><code>match_indices()</code></a>,
+    which returns an iterator of <code>(usize, &amp;str)</code> tuples — one per occurrence,
+    each containing the byte position and the matched text.
+  </p>
+
+  <pre><code>let text = "height limit 2000mm, minimum height 150mm";
+
+for (pos, matched) in text.match_indices("height") {
+    println!("{pos}: {matched}");
+}
+// 0: height
+// 21: height</code></pre>
+
+  <p>
+    Java has no direct equivalent — the closest approach is a loop calling
+    <code>indexOf(term, fromIndex)</code> repeatedly and advancing the position each time.
+    <code>match_indices()</code> packages that loop into a lazy iterator.
+  </p>
+
+  <h3>Concept 2: flat_map() — one-to-many transformation</h3>
+
+  <p>
+    <code>.map()</code> transforms each element into <em>one</em> value. When the
+    transformation produces an <em>iterator</em> per element and you want to merge all
+    those iterators into a single flat stream, you use
+    <a href="https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.flat_map" target="_blank"><code>.flat_map()</code></a>.
+    Java's <code>Stream.flatMap()</code> is identical. See
+    <a href="appendix-05-flatmap.html">Appendix 5: flatMap</a> for full Java and Rust
+    examples side by side.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>terms.stream()<br>&nbsp;&nbsp;.flatMap(t -&gt; findAll(doc, t))<br>&nbsp;&nbsp;.collect(toList())</code></td>
+        <td><code>terms.iter()<br>&nbsp;&nbsp;.flat_map(|t| lower.match_indices(*t))<br>&nbsp;&nbsp;.collect()</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    In this lesson, each query term maps to an iterator of <code>(position, matched)</code>
+    tuples. <code>flat_map</code> merges all those iterators so you end up with one stream
+    of every match position across all terms.
+  </p>
+
+  <h3>Concept 3: dedup() — removing consecutive duplicates</h3>
+
+  <p>
+    Two different query terms might match at the same byte position (e.g. "height" and
+    "heights" both start at position 42). After collecting all positions, you sort them
+    and then call
+    <a href="https://doc.rust-lang.org/std/vec/struct.Vec.html#method.dedup" target="_blank"><code>.dedup()</code></a>
+    to remove consecutive duplicates — leaving each position appearing at most once.
+  </p>
+
+  <pre><code>let mut positions = vec![0, 21, 21, 45]; // 21 appears twice
+positions.dedup();
+// positions is now [0, 21, 45]</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">dedup() requires the Vec to be sorted first</div>
+    <p>
+      <code>dedup()</code> only removes <em>consecutive</em> duplicates. If the Vec is
+      unsorted, duplicates that are not adjacent will survive. Always call
+      <code>.sort()</code> before <code>.dedup()</code> when your goal is removing all
+      duplicates — the same pattern as Java's <code>new ArrayList&lt;&gt;(new
+      LinkedHashSet&lt;&gt;(list))</code>, but more explicit about what is happening.
+    </p>
+  </div>
+
+  <h2>Step 1 — Replace the excerpt block in search_docs</h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code>. Inside the <code>if terms.iter().all(...)</code>
+    block, replace everything from the excerpt comment down to the <code>results.push()</code>
+    call:
+  </p>
+
+  <p><strong>Before:</strong></p>
+  <pre><code>// Anchor the excerpt at the first term that has an exact substring match.
+// Falls back to the document start if all matches were fuzzy-only.
+let pos = terms.iter().find_map(|term| lower.find(*term)).unwrap_or(0);
+// 200 chars of lookback context, 400 chars of lookahead
+let start = pos.saturating_sub(200);
+let end = (pos + 400).min(content.len());
+// Slice from the original (not lowercased) content to preserve capitalisation
+let excerpt = content[start..end].trim();
+
+// Score = total exact occurrences of all terms; used for ranking
+let score: usize =
+    terms.iter().map(|term| lower.matches(*term).count()).sum();
+
+results.push((
+    score,
+    format!("• {title}\n  Source: {resource}\n\n  ...{excerpt}..."),
+));</code></pre>
+
+  <p><strong>After:</strong></p>
+  <pre><code>// Collect byte positions of every exact match across all query terms,
+// then sort and deduplicate so each position appears at most once
+let mut positions: Vec&lt;usize&gt; = terms.iter()
+    .flat_map(|term| lower.match_indices(*term).map(|(pos, _)| pos))
+    .collect();
+positions.sort();
+positions.dedup();
+
+// Build up to 3 non-overlapping excerpt windows (150 chars back, 300 ahead)
+let mut excerpts: Vec&lt;&amp;str&gt; = Vec::new();
+let mut last_end: usize = 0;
+for pos in &positions {
+    let pos = *pos;
+    // Skip positions that fall inside the previous window
+    if pos < last_end {
+        continue;
+    }
+    let start = pos.saturating_sub(150);
+    let end = (pos + 300).min(content.len());
+    excerpts.push(content[start..end].trim());
+    last_end = end;
+    if excerpts.len() >= 3 {
+        break;
+    }
+}
+
+// Fall back to the document start if all matches were fuzzy-only
+if excerpts.is_empty() {
+    excerpts.push(content[..400_usize.min(content.len())].trim());
+}
+
+// Score = total exact occurrences of all terms; used for ranking
+let score: usize =
+    terms.iter().map(|term| lower.matches(*term).count()).sum();
+
+results.push((
+    score,
+    format!("• {title}\n  Source: {resource}\n\n  ...{}...",
+        excerpts.join("\n\n  ...")),
+));</code></pre>
+
+  <h3>What changed and why</h3>
+
+  <ul>
+    <li>
+      <code>flat_map(|term| lower.match_indices(*term).map(|(pos, _)| pos))</code> —
+      for each query term, get all its match positions in the document. <code>.map(|(pos, _)| pos)</code>
+      discards the matched text (we only need the position), and <code>flat_map</code>
+      merges the per-term iterators into one flat stream of positions.
+    </li>
+    <li>
+      <code>positions.sort(); positions.dedup();</code> — sort so duplicates are adjacent,
+      then remove them. Without this, two terms matching at the same location would produce
+      two identical excerpt windows.
+    </li>
+    <li>
+      <code>if pos &lt; last_end { continue; }</code> — the non-overlap guard. If this
+      position falls inside the window we just emitted, skip it. This prevents two excerpts
+      from showing the same passage.
+    </li>
+    <li>
+      <code>400_usize.min(content.len())</code> — the underscore in <code>400_usize</code>
+      is a type suffix, telling Rust this literal is a <code>usize</code>. Without it, Rust
+      would need to infer the type from context, which fails here because the literal
+      appears on the left of <code>.min()</code> with no other type information available.
+    </li>
+    <li>
+      <code>excerpts.join("\n\n  ...")</code> — joins multiple excerpt strings with a
+      visual separator so Claude can read them as distinct passages.
+    </li>
+  </ul>
+
+  <h2>Step 2 — Build and test</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    Restart the server and ask a question about a topic that appears in multiple sections
+    of one document:
+  </p>
+
+  <pre><code>What are the reflector height requirements?</code></pre>
+
+  <p>
+    If the Reflector Deployment Guide mentions height in several places, you should now
+    see multiple excerpt passages in the result rather than just one.
+  </p>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/std/primitive.str.html#method.match_indices" target="_blank">
+        <strong>str::match_indices — Rust standard library docs</strong>
+      </a><br>
+      Documents the method used in this lesson. While you're there, look at
+      <code>match_indices</code>'s sibling <code>rmatch_indices</code> — it searches from
+      the right, useful when you want the last N occurrences rather than the first N.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "What is the difference between flat_map() and map() followed by flatten()?",
+    "How would I change the excerpt cap from 3 to a configurable number?",
+    or "What does the _usize suffix on a number literal do?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0014-list-documents.html">← Lesson 14: List Documents Tool</a>
+    <a href="0016-unit-tests.html">Lesson 16: Unit Tests →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What does flat_map() do that map() alone cannot?",
+    options: [
+      "It applies the closure in parallel across multiple threads for speed",
+      "It filters out None values automatically before collecting results",
+      "It transforms each element into an iterator and merges all iterators into one stream",
+      "It applies two closures sequentially — one to map, one to flatten — as separate passes"
+    ],
+    correct: 2,
+    explanation: "map() produces one output value per input element. flat_map() produces an iterator per input element, then merges all those iterators into a single flat stream. Here, each query term maps to an iterator of match positions, and flat_map() combines all those position iterators into one."
+  },
+  {
+    question: "Why must positions.sort() be called before positions.dedup()?",
+    options: [
+      "dedup() only removes consecutive duplicates — without sorting, non-adjacent duplicates survive",
+      "sort() converts the positions from byte offsets to character indices before dedup() can run",
+      "dedup() panics on unsorted input in debug builds as a safety check",
+      "sort() is required to satisfy the borrow checker before a mutable dedup() call"
+    ],
+    correct: 0,
+    explanation: "dedup() scans through the Vec and removes each element that equals the previous one. If duplicates are not adjacent — which happens when the Vec is unsorted — dedup() misses them. Sorting first guarantees all duplicates are consecutive and will be removed."
+  },
+  {
+    question: "What does the check if pos < last_end { continue; } prevent?",
+    options: [
+      "It prevents the loop from reading past the end of the document content string",
+      "It prevents byte positions that fall inside an already-emitted window from producing a duplicate excerpt",
+      "It prevents the fuzzy matcher from running on positions already confirmed as exact matches",
+      "It prevents the score counter from double-counting terms that appear in multiple windows"
+    ],
+    correct: 1,
+    explanation: "last_end tracks the end byte of the most recently emitted window. If the next position falls before last_end, it is inside the previous window — emitting an excerpt there would overlap with one already shown. Skipping it keeps all excerpts non-overlapping."
+  },
+  {
+    question: "What does lower.match_indices(\"height\") return for each occurrence found?",
+    options: [
+      "A usize — the byte position of the match, same as find()",
+      "A (usize, &str) tuple — the byte position and the matched text",
+      "A bool — true if the term was found, false otherwise",
+      "A Range<usize> — the start and end byte positions of the match"
+    ],
+    correct: 1,
+    explanation: "match_indices() yields (usize, &str) tuples. The usize is the byte offset of the match start; the &str is a slice of the original string containing the matched text. In this lesson we discard the &str with _ and keep only the position."
+  }
+]);
+</script>
+</body>
+</html>

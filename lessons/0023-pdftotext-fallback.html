@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 23 — External Commands &amp; the pdftotext Fallback</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <script src="../assets/quiz.js"></script>
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 23</div>
+    <h1>External Commands &amp; the pdftotext Fallback</h1>
+    <div class="lesson-meta">
+      <span>~25 min</span>
+      <span>Topic: std::process::Command</span>
+      <span>Prerequisite: <a href="0022-clap-cli-arguments.html">Lesson 22</a> (clap)</span>
+    </div>
+  </header>
+
+  <p>
+    Not all PDFs are equal. Some have a text layer that <code>pdf-extract</code> — a Rust
+    library — fails to parse correctly, returning an empty string even though the document
+    clearly contains text. This happens with certain font encodings, compression schemes, or
+    non-standard PDF structure that the library doesn't handle.
+  </p>
+  <p>
+    The fix is a fallback to <strong>pdftotext</strong>, a command-line tool from the
+    poppler-utils package. Poppler has been maintained for over 20 years and handles far
+    more PDF edge cases than <code>pdf-extract</code>. When <code>pdf-extract</code> comes
+    up empty, trying <code>pdftotext</code> on the same file often succeeds.
+    In this lesson you'll call it from Rust using <code>std::process::Command</code> — Rust's
+    <code>ProcessBuilder</code> equivalent.
+  </p>
+  <div class="callout">
+    <div class="callout-label">What pdftotext cannot fix</div>
+    <p>
+      If a PDF was created by rasterising slides or pages into images — common when exporting
+      some PowerPoint files — there is no text layer at all. Neither <code>pdf-extract</code>
+      nor <code>pdftotext</code> can help; both return empty output. Extracting text from
+      image-based PDFs requires <strong>OCR</strong> (e.g. Tesseract), which reads the pixels
+      rather than the PDF structure. That is out of scope for this lesson.
+    </p>
+  </div>
+
+  <p>As a bonus, you'll add a <code>--force-pdftotext</code> flag — the payoff that was teased
+  at the end of Lesson 22. With clap already in place, it's literally two lines.</p>
+
+  <div class="callout">
+    <div class="callout-label">Prerequisite check</div>
+    <p>
+      This lesson assumes Lesson 22 is applied: <code>clap</code> is in <code>Cargo.toml</code>
+      and <code>extract.rs</code> uses an <code>Args</code> struct with <code>Args::parse()</code>.
+      If you haven't done that yet, do it now before continuing — the steps in this lesson build
+      directly on top of it.
+    </p>
+    <p>Quick check: <code>cargo build &amp;&amp; ./target/debug/extract --help</code> should print
+    a usage page. If it still crashes or says "Usage: extract &lt;pdf-file&gt; …", go back to
+    Lesson 22 first.</p>
+  </div>
+
+  <h2>Step 0: Install pdftotext</h2>
+
+  <p>
+    <strong>pdftotext</strong> ships as part of <code>poppler-utils</code>. In the dev container
+    (or any Debian/Ubuntu machine):
+  </p>
+
+  <pre><code>sudo apt-get install -y poppler-utils</code></pre>
+
+  <p>Confirm it's available (pdftotext doesn't support <code>--version</code> — test on a real file):</p>
+
+  <pre><code>pdftotext kuka-docs/EmergencyFireAlarm.pdf -
+# Expected: text output or blank line — no "command not found"</code></pre>
+
+  <p>
+    The tool accepts a PDF path and an output path. Passing <code>-</code> as the output path
+    is the key trick — it writes the extracted text to <em>stdout</em> instead of a file,
+    which is exactly what we want when capturing output from Rust.
+  </p>
+
+  <pre><code># Manual test — try this on a known-empty PDF before touching Rust code
+pdftotext kuka-docs/EmergencyFireAlarm.pdf -</code></pre>
+
+  <h2>std::process::Command — Rust's ProcessBuilder</h2>
+
+  <p>
+    In Java you spawn an external process with <code>ProcessBuilder</code>.
+    In Rust the equivalent is <code>std::process::Command</code>. The API is a builder chain —
+    no surprises if you've used picocli or fluent-style Java APIs before.
+  </p>
+
+  <table class="comparison-table">
+    <thead>
+      <tr><th>Java (ProcessBuilder)</th><th>Rust (std::process::Command)</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>new ProcessBuilder("pdftotext", path, "-")</code></td>
+        <td><code>Command::new("pdftotext").arg(path).arg("-")</code></td>
+      </tr>
+      <tr>
+        <td><code>pb.start(); stream → bytes</code></td>
+        <td><code>.output()?</code><br>blocks + captures stdout, stderr, exit status</td>
+      </tr>
+      <tr>
+        <td><code>process.exitValue() == 0</code></td>
+        <td><code>output.status.success()</code></td>
+      </tr>
+      <tr>
+        <td><code>new String(bytes, "UTF-8")</code></td>
+        <td><code>String::from_utf8(output.stdout)?</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    <code>.output()</code> is the key method. It blocks until the process exits and returns a
+    <code>Result&lt;Output&gt;</code>. The <code>Output</code> struct has three fields:
+  </p>
+
+  <ul>
+    <li><code>status</code> — the exit code, as an <code>ExitStatus</code></li>
+    <li><code>stdout</code> — everything the process wrote to stdout, as <code>Vec&lt;u8&gt;</code></li>
+    <li><code>stderr</code> — everything written to stderr, as <code>Vec&lt;u8&gt;</code></li>
+  </ul>
+
+  <p>
+    Both stdout and stderr are raw bytes (<code>Vec&lt;u8&gt;</code>) because a process can write
+    arbitrary binary data. Converting to <code>String</code> is an explicit step —
+    <code>String::from_utf8(output.stdout)</code> — because it can fail if the bytes aren't
+    valid UTF-8.
+  </p>
+
+  <h2>New concept: bail!</h2>
+
+  <p>
+    You've used <code>?</code> to propagate errors up the call stack. Sometimes you want to
+    <em>create</em> an error from scratch and return immediately, without a value to unwrap.
+    That's what <code>bail!</code> does — it's a macro from <code>anyhow</code> that returns
+    an <code>Err</code> immediately:
+  </p>
+
+  <pre><code>// Java equivalent: throw new RuntimeException("pdftotext failed: " + stderr);
+bail!("pdftotext failed: {stderr}");</code></pre>
+
+  <p>
+    Think of it as "throw an anyhow error". The <code>!</code> marks it as a macro (like
+    <code>println!</code> and <code>format!</code>). It works in any function that returns
+    <code>Result</code>.
+  </p>
+
+  <h2>Step 1: Add the --force-pdftotext flag</h2>
+
+  <p>
+    This is the payoff from Lesson 22. To add a new boolean flag to a clap struct, you add
+    one field with a <code>#[arg(long)]</code> attribute:
+  </p>
+
+  <pre><code>#[derive(Parser)]
+#[command(name = "extract", about = "Extract KUKA PDFs to OKF markdown", version)]
+struct Args {
+    /// A single PDF file, or a directory of PDFs
+    input: String,
+
+    /// The knowledge/ directory to write OKF files into
+    output_dir: String,
+
+    /// Skip pdf-extract and go straight to pdftotext
+    #[arg(long)]
+    force_pdftotext: bool,   // ← new: two lines, full CLI flag for free
+}</code></pre>
+
+  <p>
+    With <code>bool</code>, clap treats this as a flag that defaults to <code>false</code> when
+    absent and becomes <code>true</code> when the user passes <code>--force-pdftotext</code>.
+    No argument value needed — just the presence of the flag flips the boolean.
+  </p>
+
+  <p>
+    You also need to thread the flag down to <code>process_pdf</code>. Update the calls in
+    <code>main</code> to pass <code>args.force_pdftotext</code>, and add it as a parameter:
+  </p>
+
+  <pre><code>// In main — single-file path:
+if let Err(e) = process_pdf(input, knowledge_dir, args.force_pdftotext) { … }
+
+// In main — batch loop:
+match process_pdf(&amp;path, knowledge_dir, args.force_pdftotext) { … }
+
+// Function signature:
+fn process_pdf(pdf_path: &amp;Path, knowledge_dir: &amp;Path, force_pdftotext: bool) -&gt; Result&lt;()&gt; { … }</code></pre>
+
+  <h2>Step 2: Write the try_pdftotext function</h2>
+
+  <p>
+    Add this function to <code>extract.rs</code>. Place it near the top, before
+    <code>process_pdf</code>:
+  </p>
+
+  <pre><code>/// Calls `pdftotext &lt;pdf_path&gt; -` and returns the captured stdout as a String.
+/// The `-` argument tells pdftotext to write to stdout instead of a file.
+fn try_pdftotext(pdf_path: &amp;Path) -&gt; Result&lt;String&gt; {
+    // Build and run the command — .output() blocks until the process exits
+    let output = std::process::Command::new("pdftotext")
+        .arg(pdf_path)  // the PDF to process
+        .arg("-")       // "-" means: write output to stdout
+        .output()
+        // .context() attaches a human-readable message if the command isn't found
+        .context("pdftotext not found — install poppler-utils")?;
+
+    // A non-zero exit code means pdftotext rejected the file
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&amp;output.stderr);
+        bail!("pdftotext failed: {stderr}");
+    }
+
+    // stdout is Vec&lt;u8&gt; — convert to String, propagating an error if not valid UTF-8
+    String::from_utf8(output.stdout)
+        .context("pdftotext output is not valid UTF-8")
+}</code></pre>
+
+  <p>
+    Note the <code>.context()</code> call after <code>.output()</code>: if <code>pdftotext</code>
+    is not installed, the OS returns an error like "No such file or directory". Without
+    <code>.context()</code> that error would be confusing. With it, the user sees
+    "pdftotext not found — install poppler-utils" instead.
+  </p>
+
+  <h2>Step 3: Add the fallback in process_pdf</h2>
+
+  <p>
+    Replace the single <code>pdf_extract::extract_text()</code> call with an if/else that checks
+    the flag and whether the text came back empty:
+  </p>
+
+  <pre><code>fn process_pdf(pdf_path: &amp;Path, knowledge_dir: &amp;Path, force_pdftotext: bool) -&gt; Result&lt;()&gt; {
+    println!("Extracting: {}", pdf_path.display());
+
+    // Try pdf-extract first — unless the caller forced pdftotext
+    let text = if force_pdftotext {
+        // Flag set: skip pdf-extract entirely
+        try_pdftotext(pdf_path)?
+    } else {
+        let extracted = pdf_extract::extract_text(pdf_path)?;
+        if extracted.trim().is_empty() {
+            // pdf-extract returned nothing — fall back to pdftotext
+            println!("  pdf-extract returned empty text — trying pdftotext…");
+            try_pdftotext(pdf_path)?
+        } else {
+            extracted
+        }
+    };
+
+    // Everything below is unchanged from Lesson 22
+    let stem = pdf_path.file_stem().unwrap().to_string_lossy();
+    // … rest of the function …
+}</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Pattern to remember</div>
+    <p>
+      The <code>if expr { … } else { … }</code> block is an expression in Rust — it has a value.
+      Assigning the whole block to <code>let text = if … { … } else { … };</code> is idiomatic.
+      In Java you'd need a mutable variable and separate assignment. In Rust the value flows out
+      from whichever branch ran.
+    </p>
+  </div>
+
+  <h2>Add .context() to Cargo.toml imports</h2>
+
+  <p>
+    <code>.context()</code> is from the <code>anyhow</code> trait. You already have
+    <code>anyhow = "1"</code> in Cargo.toml, but you need to import the trait and the
+    <code>bail!</code> macro. Change the import line at the top of <code>extract.rs</code>:
+  </p>
+
+  <pre><code>// Before:
+use anyhow::Result;
+
+// After — add Context (for .context()) and bail! (for early-exit errors):
+use anyhow::{bail, Context, Result};</code></pre>
+
+  <h2>The complete updated extract.rs</h2>
+
+  <p>
+    Here is the complete file after all changes. The only things that changed from the Lesson 22
+    version are: the new import, the new <code>force_pdftotext</code> field, the new
+    <code>try_pdftotext</code> function, and the updated <code>process_pdf</code> signature
+    and body.
+  </p>
+
+  <pre><code>use anyhow::{bail, Context, Result};
+use clap::Parser;
+use std::path::Path;
+
+/// Extracts KUKA PDFs to OKF markdown files in a knowledge bundle.
+#[derive(Parser)]
+#[command(name = "extract", about = "Extract KUKA PDFs to OKF markdown", version)]
+struct Args {
+    /// A single PDF file, or a directory of PDFs
+    input: String,
+
+    /// The knowledge/ directory to write OKF files into
+    output_dir: String,
+
+    /// Skip pdf-extract and go straight to pdftotext
+    #[arg(long)]
+    force_pdftotext: bool,
+}
+
+fn main() {
+    let args = Args::parse();
+
+    let input = Path::new(&amp;args.input);
+    let knowledge_dir = Path::new(&amp;args.output_dir);
+
+    if !knowledge_dir.is_dir() {
+        eprintln!("Output directory does not exist: {}", knowledge_dir.display());
+        std::process::exit(1);
+    }
+
+    if input.is_file() {
+        if let Err(e) = process_pdf(input, knowledge_dir, args.force_pdftotext) {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    } else if input.is_dir() {
+        let entries = std::fs::read_dir(input).unwrap_or_else(|e| {
+            eprintln!("Cannot read directory: {e}");
+            std::process::exit(1);
+        });
+
+        let mut ok: usize = 0;
+        let mut failed: usize = 0;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("pdf") {
+                continue;
+            }
+            match process_pdf(&amp;path, knowledge_dir, args.force_pdftotext) {
+                Ok(()) =&gt; ok += 1,
+                Err(e) =&gt; {
+                    eprintln!("Skipping {}: {e}", path.display());
+                    failed += 1;
+                }
+            }
+        }
+
+        println!("\nDone: {ok} extracted, {failed} failed.");
+    } else {
+        eprintln!("Input path not found: {}", input.display());
+        std::process::exit(1);
+    }
+}
+
+/// Calls `pdftotext &lt;pdf_path&gt; -` and returns the captured stdout as a String.
+fn try_pdftotext(pdf_path: &amp;Path) -&gt; Result&lt;String&gt; {
+    let output = std::process::Command::new("pdftotext")
+        .arg(pdf_path)
+        .arg("-")
+        .output()
+        .context("pdftotext not found — install poppler-utils")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&amp;output.stderr);
+        bail!("pdftotext failed: {stderr}");
+    }
+
+    String::from_utf8(output.stdout)
+        .context("pdftotext output is not valid UTF-8")
+}
+
+fn process_pdf(pdf_path: &amp;Path, knowledge_dir: &amp;Path, force_pdftotext: bool) -&gt; Result&lt;()&gt; {
+    println!("Extracting: {}", pdf_path.display());
+
+    let text = if force_pdftotext {
+        try_pdftotext(pdf_path)?
+    } else {
+        let extracted = pdf_extract::extract_text(pdf_path)?;
+        if extracted.trim().is_empty() {
+            println!("  pdf-extract returned empty text — trying pdftotext…");
+            try_pdftotext(pdf_path)?
+        } else {
+            extracted
+        }
+    };
+
+    let stem = pdf_path.file_stem().unwrap().to_string_lossy();
+    let filename = pdf_path.file_name().unwrap().to_string_lossy();
+    let slug = stem
+        .to_lowercase()
+        .replace(' ', "-")
+        .replace(['.', '(', ')'], "");
+
+    let okf = format!(
+"---
+type: technical-note
+title: {stem}
+description: Extracted from KUKA documentation.
+resource: kuka-docs/{filename}
+tags: [extracted, technical-note]
+timestamp: 2026-06-26T00:00:00Z
+---
+
+{body}",
+        stem = stem,
+        filename = filename,
+        body = text.trim(),
+    );
+
+    let output = knowledge_dir.join(format!("{slug}.md"));
+    std::fs::write(&amp;output, &amp;okf)?;
+    println!("  → {}", output.display());
+
+    Ok(())
+}</code></pre>
+
+  <h2>Build and test</h2>
+
+  <p>Add <code>clap</code> to Cargo.toml if it's not there yet (Lesson 22), then build:</p>
+
+  <pre><code># Cargo.toml [dependencies] — add if missing:
+# clap = { version = "4", features = ["derive"] }
+
+cargo build</code></pre>
+
+  <p>Verify the new flag appears in help:</p>
+
+  <pre><code>./target/debug/extract --help
+# Should show: --force-pdftotext   Skip pdf-extract and go straight to pdftotext</code></pre>
+
+  <p>Test the automatic fallback on the known-empty PDF:</p>
+
+  <pre><code># Automatic fallback — pdf-extract tries first, sees empty, hands off to pdftotext
+./target/debug/extract kuka-docs/EmergencyFireAlarm.pdf knowledge/
+
+# Explicit flag — skip pdf-extract entirely
+./target/debug/extract --force-pdftotext kuka-docs/EmergencyFireAlarm.pdf knowledge/</code></pre>
+
+  <p>
+    If poppler-utils is installed and EmergencyFireAlarm.pdf has any extractable text,
+    you should now see a non-empty OKF file instead of a blank one. Check:
+  </p>
+
+  <pre><code>cat knowledge/emergencyfirealarm.md</code></pre>
+
+  <h2>Retrieval practice</h2>
+
+  <div class="quiz" id="quiz-l23">
+    <div class="quiz-title">Quiz — close the lesson and answer from memory</div>
+  </div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <strong><a href="https://doc.rust-lang.org/std/process/struct.Command.html" target="_blank">
+        std::process::Command — Rust Standard Library docs
+      </a></strong><br>
+      The definitive reference. Pay attention to the builder methods (<code>.arg()</code>,
+      <code>.env()</code>, <code>.stdout()</code>), and the difference between <code>.output()</code>
+      (blocks, captures everything) and <code>.spawn()</code> (non-blocking, streaming).
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Ask your teacher.</strong> If anything is unclear — why a method returns bytes
+    instead of a String, what <code>String::from_utf8_lossy</code> does differently from
+    <code>String::from_utf8</code>, or when to use <code>.spawn()</code> instead of
+    <code>.output()</code> — just ask. The agent is here to help.
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0022-clap-cli-arguments.html">← Lesson 22: clap CLI Arguments</a>
+    <a href="0024-mcp-resources.html">Lesson 24: MCP Resources →</a>
+  </nav>
+
+</div>
+
+<script>
+initQuiz("quiz-l23", [
+  {
+    question: "What does calling .output() on a std::process::Command do?",
+    options: [
+      "Streams the process output line-by-line to a callback function",
+      "Blocks until the process exits, then returns its exit status, stdout, and stderr",
+      "Starts the process in the background and returns immediately",
+      "Writes the process output directly to the terminal"
+    ],
+    correct: 1,
+    explanation: "Correct. .output() is a blocking call — it waits for the process to finish and gives you everything at once. Use .spawn() if you need non-blocking or streaming."
+  },
+  {
+    question: "output.status.success() returns true when…",
+    options: [
+      "The process printed at least one line to stdout",
+      "pdftotext successfully found text in the PDF",
+      "The process exited with code 0",
+      "The captured output is valid UTF-8"
+    ],
+    correct: 2,
+    explanation: "Correct. Exit code 0 is the Unix convention for success. Any other exit code means something went wrong — regardless of what was printed to stdout."
+  },
+  {
+    question: "Why does try_pdftotext pass \"-\" as the second argument to pdftotext?",
+    options: [
+      "It tells pdftotext to write its output to stdout instead of a file",
+      "It suppresses pdftotext's progress messages",
+      "It sets the page range to extract only page 1",
+      "It enables verbose debug output from pdftotext"
+    ],
+    correct: 0,
+    explanation: "Correct. The dash is a Unix convention meaning 'use stdout'. Without it, pdftotext writes a .txt file next to the PDF instead of returning text we can capture."
+  },
+  {
+    question: "What does bail!(\"message\") do inside a function that returns Result<T>?",
+    options: [
+      "It prints the message to stderr and then panics",
+      "It logs a warning and continues execution",
+      "It retries the current operation once before failing",
+      "It returns Err immediately, wrapping the message as an anyhow error"
+    ],
+    correct: 3,
+    explanation: "Correct. bail! is anyhow's shorthand for 'return Err(anyhow!(message))'. Think of it as throw in Java, but it produces an Err instead of unwinding the stack."
+  }
+]);
+</script>
+
+</body>
+</html>

@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 22 — clap: Proper CLI Arguments</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 22</div>
+    <h1>clap: Proper CLI Arguments</h1>
+    <div class="lesson-meta">
+      <span>~20 min</span>
+      <span>Crate: clap 4 (derive)</span>
+      <span>Prerequisite: <a href="0020-batch-extraction.html">Lesson 20</a></span>
+    </div>
+  </header>
+
+  <p>
+    Your <code>extract</code> binary currently parses arguments by hand — grabbing
+    <code>args.next()</code> twice and crashing with a generic usage message if anything is missing.
+    That works, but it gives you nothing for free: no <code>--help</code>, no version flag, no
+    useful error when someone passes the wrong number of arguments.
+  </p>
+  <p>
+    This lesson replaces all of that with <strong>clap</strong>, Rust's standard CLI-argument library.
+    The payoff is an auto-generated <code>--help</code> page, friendly error messages,
+    and a cleaner foundation for the next lesson — where you'll add a
+    <code>--force-pdftotext</code> flag in about two lines.
+  </p>
+
+  <h2>Java analogy: picocli</h2>
+
+  <p>
+    If you've used <a href="https://picocli.info/" target="_blank">picocli</a> in Java, clap's
+    derive API will feel immediately familiar. You declare a class annotated with
+    <code>@Command</code> and fields annotated with <code>@Parameters</code> or
+    <code>@Option</code>, then call <code>CommandLine.execute(args)</code>. picocli generates
+    the usage page from those annotations.
+  </p>
+  <p>
+    clap does exactly the same thing — but in Rust, annotations are called
+    <strong>attributes</strong>, and the "annotation processor" is a derive macro that runs
+    at compile time.
+  </p>
+
+  <table class="comparison-table">
+    <thead>
+      <tr><th>Java (picocli)</th><th>Rust (clap)</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>@Command(name="extract")</code><br>class Args { … }</td>
+        <td><code>#[derive(Parser)]</code><br><code>#[command(name="extract")]</code><br>struct Args { … }</td>
+      </tr>
+      <tr>
+        <td><code>@Parameters(index="0", description="…")</code><br>String input;</td>
+        <td><code>/// description here</code><br>input: String,</td>
+      </tr>
+      <tr>
+        <td><code>new CommandLine(new Args()).execute(argv)</code></td>
+        <td><code>Args::parse()</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Feature flags in Cargo.toml</h2>
+
+  <p>
+    clap ships in a modular form. Its <strong>derive</strong> macro support — the
+    <code>#[derive(Parser)]</code> ability — is an optional component you must explicitly opt
+    into. You do this with a <strong>feature flag</strong> in <code>Cargo.toml</code>.
+  </p>
+  <p>
+    Think of feature flags like Maven optional dependencies: the artifact is published in one
+    bundle, but consumers decide which sub-features they actually compile in.
+  </p>
+
+  <pre><code># Before — clap without derive (can't use #[derive(Parser)])
+clap = "4"
+
+# After — clap with derive enabled
+clap = { version = "4", features = ["derive"] }</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Pattern to remember</div>
+    Any time a Rust crate's README says "add the <code>derive</code> feature" (or <code>macros</code>,
+    <code>serde</code>, etc.), this is what it means: change the simple <code>crate = "x"</code>
+    entry to the table form and list the feature in <code>features = […]</code>.
+    You already did this for <code>serde</code> and <code>rmcp</code> in this project.
+  </div>
+
+  <h2>The three moving parts</h2>
+
+  <p>Upgrading <code>extract.rs</code> to clap touches three things:</p>
+  <ol>
+    <li><strong>Cargo.toml</strong> — add the <code>clap</code> dependency with <code>derive</code> feature</li>
+    <li><strong>A new <code>Args</code> struct</strong> — describe your arguments declaratively</li>
+    <li><strong><code>main()</code></strong> — replace the manual <code>match args.next()</code> block with <code>Args::parse()</code></li>
+  </ol>
+
+  <h2>Step 1 — Add clap to Cargo.toml</h2>
+
+  <p>
+    Instead of hand-editing <code>Cargo.toml</code>, use <code>cargo add</code> — it's the
+    Cargo equivalent of <code>mvn dependency:add</code> or pasting a coordinate into
+    <code>pom.xml</code> and letting your IDE resolve the version. Run this from
+    <code>mcp-server/</code>:
+  </p>
+
+  <pre><code>cargo add clap --features derive</code></pre>
+
+  <p>
+    Cargo resolves the latest compatible version, writes the line into
+    <code>[dependencies]</code>, and updates <code>Cargo.lock</code> — the same end state as
+    editing the file by hand:
+  </p>
+
+  <pre><code>[dependencies]
+anyhow = "1.0.103"
+clap = { version = "4", features = ["derive"] }   # ← written by cargo add
+pdf-extract = "0.12.0"
+# … rest unchanged</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Java analogy</div>
+    <code>cargo add &lt;crate&gt; --features &lt;flag&gt;</code> is like adding a Maven dependency
+    with a classifier or optional module enabled — Cargo writes the entry and locks the
+    resolved version, the same way your build tool would update <code>pom.xml</code>.
+  </div>
+
+  <h2>Step 2 — Define the Args struct</h2>
+
+  <p>
+    At the top of <code>src/extract.rs</code>, after the existing <code>use</code> lines,
+    add this struct. Replace the entire top-of-file <code>use</code> section and the block
+    comment with the following:
+  </p>
+
+  <pre><code>use anyhow::Result;
+use clap::Parser;         // ← new import
+use std::path::Path;
+
+// CLI argument definition — clap reads these field types and doc comments
+// to generate --help output and argument validation automatically.
+#[derive(Parser)]
+#[command(
+    name    = "extract",
+    about   = "Extracts KUKA PDFs to OKF markdown files",
+    version                      // reads version from Cargo.toml automatically
+)]
+struct Args {
+    /// A single PDF file or a directory of PDFs
+    input: String,
+
+    /// The knowledge/ directory to write OKF files into
+    output_dir: String,
+}</code></pre>
+
+  <p>Three things to notice:</p>
+  <ul>
+    <li><code>#[derive(Parser)]</code> — this is the compile-time macro that generates the
+        parsing logic. Nothing else needs to change for clap to know about your fields.</li>
+    <li><code>#[command(…)]</code> — configures the overall command: its name, description,
+        and whether to expose <code>--version</code>.</li>
+    <li><code>/// doc comment</code> — that triple-slash comment above each field becomes the
+        help text for that argument. No separate annotation needed.</li>
+  </ul>
+
+  <h2>Step 3 — Replace main()</h2>
+
+  <p>
+    Find the current <code>fn main()</code> and replace only the manual argument-parsing block
+    at the top. Here is the before and after:
+  </p>
+
+  <h3>Before</h3>
+  <pre><code>fn main() {
+    let mut args = std::env::args().skip(1); // skip the binary name at index 0
+
+    // Require exactly two arguments — input path and output directory
+    let (input_arg, output_arg) = match (args.next(), args.next()) {
+        (Some(i), Some(o)) => (i, o),
+        _ => {
+            eprintln!("Usage: extract &lt;pdf-file-or-directory&gt; &lt;output-dir&gt;");
+            eprintln!("Example: extract kuka-docs\\ knowledge\\");
+            std::process::exit(1);
+        }
+    };
+
+    let input = Path::new(&amp;input_arg);
+    let knowledge_dir = Path::new(&amp;output_arg);
+    // … rest of main unchanged</code></pre>
+
+  <h3>After</h3>
+  <pre><code>fn main() {
+    // clap parses, validates, and exits with a friendly error if args are wrong.
+    // This single call replaces the entire manual match block.
+    let args = Args::parse();
+
+    let input = Path::new(&amp;args.input);
+    let knowledge_dir = Path::new(&amp;args.output_dir);
+    // … rest of main unchanged</code></pre>
+
+  <p>
+    Everything below those lines — the <code>is_dir()</code> check, the batch loop,
+    the <code>process_pdf()</code> function — stays exactly as it was.
+  </p>
+
+  <h2>Step 4 — Build and try it</h2>
+
+  <p>Inside your dev container terminal:</p>
+
+  <pre><code># Compile — clap will be downloaded and compiled on first run
+cargo build
+
+# Run with no arguments — clap catches the missing args and prints an error
+./target/debug/extract
+
+# Run with --help — clap generates this from your struct and doc comments
+./target/debug/extract --help
+
+# Run with --version — clap reads this from Cargo.toml [package] version
+./target/debug/extract --version</code></pre>
+
+  <p>The <code>--help</code> output will look like this:</p>
+
+  <pre><code>Extracts KUKA PDFs to OKF markdown files
+
+Usage: extract &lt;INPUT&gt; &lt;OUTPUT_DIR&gt;
+
+Arguments:
+  &lt;INPUT&gt;       A single PDF file or a directory of PDFs
+  &lt;OUTPUT_DIR&gt;  The knowledge/ directory to write OKF files into
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">What you got for free</div>
+    <strong>--help</strong> (generated from doc comments), <strong>--version</strong> (read from
+    Cargo.toml), a descriptive error when args are missing, and automatic type coercion if you
+    ever change a field from <code>String</code> to <code>u32</code> or <code>PathBuf</code>.
+    All of this would be dozens of lines of hand-written code otherwise.
+  </div>
+
+  <h2>Preview: next lesson</h2>
+
+  <p>
+    In the next lesson you'll add a <code>--force-pdftotext</code> flag so the extractor can
+    fall back to the system <code>pdftotext</code> tool (from poppler-utils) for PDFs that
+    <code>pdf-extract</code> returns empty text for. With clap already wired up, adding that
+    flag is exactly two lines:
+  </p>
+
+  <pre><code>struct Args {
+    /// A single PDF file or a directory of PDFs
+    input: String,
+
+    /// The knowledge/ directory to write OKF files into
+    output_dir: String,
+
+    /// Always use pdftotext instead of pdf-extract (for scanned/PowerPoint PDFs)
+    #[arg(long)]
+    force_pdftotext: bool,      // ← two lines, that's it
+}</code></pre>
+
+  <p>
+    This flag becomes <code>--force-pdftotext</code> on the command line automatically.
+    clap maps the snake_case field name to kebab-case flags. You'll implement the actual
+    fallback logic in Lesson 23.
+  </p>
+
+  <!-- Quiz -->
+  <div class="quiz">
+    <div class="quiz-title">Retrieval practice — clap basics</div>
+    <div id="quiz-root"></div>
+  </div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <strong><a href="https://docs.rs/clap/latest/clap/_derive/index.html" target="_blank">clap Derive Reference — docs.rs</a></strong><br>
+      The official derive tutorial covers positional args, options, flags, subcommands, and
+      validation. The "Tutorial" section at the top is the best 15-minute read.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask your teacher — type your question directly in the Claude Code
+    conversation. Good questions: "What's the difference between <code>#[arg(long)]</code> and
+    <code>#[arg(short)]</code>?", "How do I make an argument optional?",
+    "Why does clap use <code>Parser</code> instead of <code>Deserialize</code>?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0021-utf8-char-boundaries.html">← Lesson 21: UTF-8 Char Boundaries</a>
+    <a href="0023-pdftotext-fallback.html">Lesson 23: pdftotext Fallback →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz-root', [
+  {
+    question: 'Which Cargo.toml entry correctly adds clap with the derive macro feature enabled?',
+    options: [
+      'clap = "4"',
+      'clap = { version = "4", features = ["std"] }',
+      'clap = { version = "4", features = ["derive"] }',
+      'clap = { version = "4", features = ["macros"] }'
+    ],
+    correct: 2,
+    explanation: 'The derive feature unlocks #[derive(Parser)]. Without it, clap compiles but the macro is unavailable and you must use the builder API instead.'
+  },
+  {
+    question: 'In clap\'s derive approach, what single call replaces the entire manual argument-parsing block?',
+    options: [
+      'Args::parse()',
+      'Args::from_args()',
+      'clap::parse::<Args>()',
+      'std::env::args().parse::<Args>()'
+    ],
+    correct: 0,
+    explanation: 'Args::parse() is the entry point. It reads std::env::args() internally, validates them against your struct, and either returns a populated Args or exits with an error — all in one call.'
+  },
+  {
+    question: 'What does clap do automatically when a required positional argument is missing?',
+    options: [
+      'Panics at runtime with an index-out-of-bounds error',
+      'Returns None from Args::try_parse() silently',
+      'Generates a compile-time error about missing arguments',
+      'Prints a descriptive error message and exits with a non-zero code'
+    ],
+    correct: 3,
+    explanation: 'clap handles the bad-args case for you: it prints which argument is missing, shows the usage line, and exits. No manual eprintln!/process::exit needed.'
+  },
+  {
+    question: 'How do you write the help text for a field in clap\'s derive approach?',
+    options: [
+      '#[arg(help_text = "description")] on the field',
+      '/// description as a doc comment above the field',
+      '#[command(field = "input", about = "description")] on the struct',
+      'Call .about("description") on Args at runtime'
+    ],
+    correct: 1,
+    explanation: 'Triple-slash (///) doc comments above a field are automatically picked up by clap\'s derive macro as the argument\'s help text. This is why the derive approach feels so clean — your normal Rust documentation doubles as CLI help.'
+  }
+]);
+</script>
+</body>
+</html>

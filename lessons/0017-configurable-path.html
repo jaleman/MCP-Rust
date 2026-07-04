@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 17: Configurable Knowledge Path</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 17</div>
+    <h1>Configurable Knowledge Path</h1>
+    <div class="lesson-meta">
+      <span>~15 minutes</span>
+      <span>Hands-on — edit, build, test in your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're fixing</h2>
+
+  <p>
+    The knowledge directory path is hardcoded as <code>"knowledge"</code> in two places —
+    <code>list_docs</code> and <code>search_docs</code>. This causes two problems:
+  </p>
+
+  <ol>
+    <li>
+      <strong>Tests can't use a temp directory.</strong> Integration tests need to create
+      their own isolated files. With a hardcoded path there is no way to point the server
+      at a different directory without editing the source code.
+    </li>
+    <li>
+      <strong>Production deployments break if the working directory is wrong.</strong>
+      The server resolves <code>"knowledge"</code> relative to wherever it was launched
+      from. If that directory isn't the project root, the bundle is invisible.
+    </li>
+  </ol>
+
+  <p>
+    This lesson extracts the path into a helper function that reads an environment variable
+    — <code>KUKA_KNOWLEDGE_DIR</code> — and falls back to <code>"knowledge"</code> if it
+    isn't set. Every existing deployment continues to work unchanged; new deployments and
+    tests can override it.
+  </p>
+
+  <h2>New concepts — translated from Java</h2>
+
+  <h3>Concept 1: Reading environment variables</h3>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>String dir = System.getenv("KUKA_KNOWLEDGE_DIR");<br>// returns null if not set</code></td>
+        <td><code>std::env::var("KUKA_KNOWLEDGE_DIR")<br>// returns Result&lt;String, VarError&gt;</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    Java returns <code>null</code> when a variable is absent, which requires a null check.
+    Rust returns
+    <a href="https://doc.rust-lang.org/std/env/fn.var.html" target="_blank"><code>Result&lt;String, VarError&gt;</code></a>
+    — either <code>Ok(value)</code> if the variable exists, or <code>Err(VarError::NotPresent)</code>
+    if it doesn't. This forces you to handle the missing case explicitly, the same way
+    <code>Result</code> forces you to handle errors.
+  </p>
+
+  <h3>Concept 2: PathBuf — the owned path type</h3>
+
+  <p>
+    You have used <code>std::path::Path</code> throughout the server. <code>Path</code> is
+    a borrowed reference to a path — like <code>&amp;str</code> is to <code>String</code>.
+    <code>PathBuf</code> is the owned, heap-allocated version — like <code>String</code>.
+    You need <code>PathBuf</code> here because the path is constructed at runtime from a
+    <code>String</code> and must be returned from a function.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Analogy</th><th>Strings</th><th>Paths</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Owned (heap, can grow)</td>
+        <td><code>String</code></td>
+        <td><code>PathBuf</code></td>
+      </tr>
+      <tr>
+        <td>Borrowed (view, no allocation)</td>
+        <td><code>&amp;str</code></td>
+        <td><code>&amp;Path</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Concept 3: unwrap_or_else — fallback on error</h3>
+
+  <p>
+    <code>.unwrap_or_else(|_| default)</code> returns the <code>Ok</code> value if present,
+    or calls the closure to produce a fallback if the result is <code>Err</code>. The
+    <code>|_|</code> discards the error value — we don't need to inspect why the variable
+    was absent, just that it was.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>String dir = System.getenv("KEY");<br>if (dir == null) dir = "knowledge";</code></td>
+        <td><code>std::env::var("KEY").unwrap_or_else(|_| "knowledge".to_string())</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Step 1 — Add the helper function</h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code>. Add this function above the
+    <code>struct KukaServer</code> declaration, alongside the other helper functions:
+  </p>
+
+  <pre><code>// Returns the knowledge bundle directory path.
+// Reads KUKA_KNOWLEDGE_DIR from the environment if set; falls back to "knowledge".
+// Using an env var lets tests and production deployments override the path
+// without recompiling.
+fn knowledge_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(
+        std::env::var("KUKA_KNOWLEDGE_DIR")
+            .unwrap_or_else(|_| "knowledge".to_string())
+    )
+}</code></pre>
+
+  <h2>Step 2 — Use the helper in list_docs and search_docs</h2>
+
+  <p>
+    In both <code>list_docs</code> and <code>search_docs</code>, replace the hardcoded
+    path line:
+  </p>
+
+  <p><strong>Before (appears twice — once in each tool):</strong></p>
+  <pre><code>// Hardcoded path — breaks if the server is not launched from the project root
+let knowledge_dir = std::path::Path::new("knowledge");</code></pre>
+
+  <p><strong>After (same replacement in both tools):</strong></p>
+  <pre><code>// Read path from environment variable, falling back to "knowledge" if not set
+let knowledge_dir = knowledge_dir();</code></pre>
+
+  <p>
+    The variable name <code>knowledge_dir</code> shadows the function name — that is fine
+    in Rust. The local variable takes precedence within its scope, and the function can
+    still be called by name anywhere else.
+  </p>
+
+  <h2>Step 3 — Build and verify</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    The default behaviour is unchanged — if <code>KUKA_KNOWLEDGE_DIR</code> is not set,
+    the server reads from <code>knowledge/</code> as before. To verify the override works,
+    set the variable before launching:
+  </p>
+
+  <pre><code># Point at a different directory temporarily
+KUKA_KNOWLEDGE_DIR=/tmp/test-bundle cargo run --bin mcp-server</code></pre>
+
+  <p>
+    Also run the existing unit tests to confirm nothing regressed:
+  </p>
+
+  <pre><code>cargo test</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Why this unblocks integration tests</div>
+    <p>
+      The next lesson will write integration tests that create a temporary directory,
+      populate it with a known OKF file, set <code>KUKA_KNOWLEDGE_DIR</code> to that
+      directory, and then call <code>search_docs</code> or <code>list_docs</code> to verify
+      the output. Without a configurable path, the test would have no way to point the
+      server at its own controlled data.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/std/env/fn.var.html" target="_blank">
+        <strong>std::env::var — Rust standard library docs</strong>
+      </a><br>
+      Documents the environment variable function used in this lesson. While you're there,
+      look at <code>std::env::vars()</code> — it returns an iterator over all environment
+      variables as <code>(key, value)</code> string pairs, useful for debugging what the
+      server can see at runtime.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "How would I support a command-line argument instead of an env var?",
+    "What is VarError::NotUnicode and when would I encounter it?",
+    or "How does variable shadowing work — can the local variable knowledge_dir really hide the function knowledge_dir()?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0016-unit-tests.html">← Lesson 16: Unit Tests</a>
+    <a href="0018-integration-tests.html">Lesson 18: Integration Tests →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What does std::env::var(\"KUKA_KNOWLEDGE_DIR\") return when the variable is not set?",
+    options: [
+      "None — the Option type signals absence without a value",
+      "Err(VarError::NotPresent) — the Result type signals the variable was absent",
+      "An empty String — the convention for absent env vars in Rust",
+      "null — the same sentinel value Java uses for System.getenv()"
+    ],
+    correct: 1,
+    explanation: "std::env::var() returns Result<String, VarError>. When the variable is not set, it returns Err(VarError::NotPresent). This forces you to handle the missing case explicitly rather than forgetting a null check."
+  },
+  {
+    question: "What is the relationship between Path and PathBuf?",
+    options: [
+      "Path is for Unix paths; PathBuf is for Windows paths with backslashes",
+      "Path is mutable and heap-allocated; PathBuf is immutable and stack-allocated",
+      "Path is for relative paths; PathBuf is for absolute paths starting with /",
+      "Path is a borrowed view of a path; PathBuf is the owned, heap-allocated version"
+    ],
+    correct: 3,
+    explanation: "Path and PathBuf mirror the &str / String relationship. Path is a borrowed reference — a read-only view into path data owned elsewhere. PathBuf owns its data on the heap and can be constructed, modified, and returned from functions. Use PathBuf when you need to build or own a path."
+  },
+  {
+    question: "What does |_| mean in .unwrap_or_else(|_| \"knowledge\".to_string())?",
+    options: [
+      "A closure that accepts the VarError and discards it — we only need the fallback value",
+      "A wildcard that makes unwrap_or_else match any Ok value instead of any Err value",
+      "A type annotation telling Rust the closure returns a String literal",
+      "An empty closure with no parameters — equivalent to writing || in this context"
+    ],
+    correct: 0,
+    explanation: "unwrap_or_else calls the closure when the Result is Err, passing the error value as the argument. |_| is a closure that accepts one argument and discards it with _. We don't need to inspect the VarError — we just want the fallback string regardless of why the variable was absent."
+  },
+  {
+    question: "The local variable knowledge_dir shadows the function knowledge_dir(). What happens when you later call knowledge_dir()?",
+    options: [
+      "A compile error — Rust does not allow a variable and function to share a name",
+      "The local variable is called instead of the function, causing incorrect behaviour",
+      "The function is called — the local variable only shadows the function within its own scope",
+      "A runtime panic — Rust detects the ambiguity and aborts to avoid undefined behaviour"
+    ],
+    correct: 2,
+    explanation: "Shadowing in Rust is scoped to the block where the variable is declared. Inside list_docs or search_docs, the name knowledge_dir refers to the local variable. Outside those functions — in the test module, for example — knowledge_dir() still refers to the function. There is no ambiguity at compile time."
+  }
+]);
+</script>
+</body>
+</html>

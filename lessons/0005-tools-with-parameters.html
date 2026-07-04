@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 5: Tools with Parameters</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 5</div>
+    <h1>Tools with Parameters</h1>
+    <div class="lesson-meta">
+      <span>~20 minutes</span>
+      <span>Hands-on — run inside your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're building</h2>
+
+  <p>
+    Right now your server has one tool — <code>ping</code> — that takes no arguments.
+    Every useful KUKA tool will need inputs: a search query, a document name, a robot
+    model number. This lesson teaches you how to add those.
+  </p>
+
+  <p>
+    By the end you'll have a <code>search_docs</code> tool that accepts a
+    <code>query</code> string and echoes it back as confirmation. It's a stub — the
+    real PDF search comes in Lesson 6 — but the parameter wiring is exactly what the
+    final production tool will use.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Before you start</div>
+    <p>
+      This lesson builds on the <code>KukaServer</code> skeleton from
+      <a href="0004-first-mcp-server.html">Lesson 4</a>. Your
+      <code>src/main.rs</code> should contain the <code>ping</code> tool and
+      <code>cargo build</code> should pass. If not, complete Lesson 4 first —
+      the code to write is there.
+    </p>
+  </div>
+
+  <h2>How MCP carries tool arguments</h2>
+
+  <p>
+    When Claude calls a tool on your server, it sends a JSON message like this:
+  </p>
+
+  <pre><code>{"name": "search_docs", "arguments": {"query": "AMR navigation"}}</code></pre>
+
+  <p>
+    Your server receives that JSON blob. rmcp's job is to:
+  </p>
+
+  <ol>
+    <li>Look up <code>"search_docs"</code> in the tool router</li>
+    <li>Deserialize <code>{"query": "AMR navigation"}</code> into a Rust struct</li>
+    <li>Call your function with that struct</li>
+    <li>Serialize the <code>CallToolResult</code> back to JSON and send it</li>
+  </ol>
+
+  <p>
+    Step 2 is handled by <strong>serde</strong> — Rust's standard
+    serialization library. <a href="https://serde.rs/" target="_blank">[serde.rs]</a>
+    Your struct needs to implement <code>serde::Deserialize</code>, which tells
+    serde how to reconstruct the struct from incoming JSON.
+  </p>
+
+  <h2>Why rmcp also needs a JSON Schema</h2>
+
+  <p>
+    Before Claude can call <code>search_docs</code>, it needs to know what arguments
+    are valid — their names, types, and what they mean. MCP exposes this as a
+    JSON Schema in the <code>tools/list</code> response. rmcp generates it
+    automatically using <strong>schemars</strong>.
+    <a href="https://docs.rs/schemars/latest/schemars/" target="_blank">[schemars docs]</a>
+  </p>
+
+  <p>
+    What the MCP client sees when it calls <code>tools/list</code>:
+  </p>
+
+  <pre><code>{
+  "name": "search_docs",
+  "description": "Search KUKA robot documentation for a given query",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "Search term to look up in the KUKA documentation"
+      }
+    },
+    "required": ["query"]
+  }
+}</code></pre>
+
+  <p>
+    Claude reads this schema and knows exactly what to send. Your job is
+    just to annotate the struct — schemars generates the schema at compile time.
+  </p>
+
+  <div class="diagram">
+    Your Rust struct<br>
+    &nbsp;&nbsp;&nbsp;→ <code>#[derive(schemars::JsonSchema)]</code><br>
+    &nbsp;&nbsp;&nbsp;→ rmcp serializes the schema into <code>tools/list</code><br>
+    &nbsp;&nbsp;&nbsp;→ Claude reads the schema, fills in arguments<br>
+    &nbsp;&nbsp;&nbsp;→ <code>#[derive(serde::Deserialize)]</code><br>
+    &nbsp;&nbsp;&nbsp;→ rmcp deserializes arguments into your struct<br>
+    &nbsp;&nbsp;&nbsp;→ your function runs
+  </div>
+
+  <h2>If you know Java: serde = Jackson, schemars = bean-to-schema generation</h2>
+
+  <h3>serde::Deserialize — Rust's Jackson</h3>
+
+  <p>
+    In Java you use Jackson to deserialize JSON into a POJO:
+  </p>
+
+  <pre><code>// Java — Jackson
+public class SearchInput {
+    @JsonProperty("query")
+    public String query;
+}
+ObjectMapper mapper = new ObjectMapper();
+SearchInput input = mapper.readValue(jsonString, SearchInput.class);</code></pre>
+
+  <p>
+    In Rust, <code>#[derive(serde::Deserialize)]</code> generates the equivalent
+    of Jackson's reflective deserialization at compile time — no <code>ObjectMapper</code>
+    instance needed:
+  </p>
+
+  <pre><code>// Rust — serde
+#[derive(serde::Deserialize)]
+struct SearchInput {
+    query: String,
+}
+// rmcp calls serde internally — you never write the deserialization call yourself</code></pre>
+
+  <p>
+    The <code>derive</code> feature flag you added in Lesson 3 enables this macro — it
+    is opt-in, like adding the Jackson databind JAR to your Maven dependencies.
+  </p>
+
+  <h3>schemars::JsonSchema — generating JSON Schema from a struct</h3>
+
+  <p>
+    In Java you might use a library like <code>jackson-module-jsonSchema</code> or
+    Swagger annotations to generate a JSON Schema from a class. <code>schemars</code>
+    does the same thing in Rust: <code>#[derive(schemars::JsonSchema)]</code> generates
+    the MCP <code>inputSchema</code> at compile time from the struct's field names and types.
+  </p>
+
+  <h3>#[derive(...)] — compile-time code generation, like Lombok</h3>
+
+  <p>
+    In Java, Lombok's <code>@Data</code>, <code>@Builder</code>, and similar annotations
+    generate boilerplate code at compile time. <code>#[derive(...)]</code> is Rust's
+    equivalent. The three derives on <code>SearchInput</code> each generate different code:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Rust derive</th><th>Java equivalent</th></tr></thead>
+    <tbody>
+      <tr><td><code>Debug</code></td><td>Lombok <code>@ToString</code> — lets you print the struct with <code>{:?}</code></td></tr>
+      <tr><td><code>serde::Deserialize</code></td><td>Jackson <code>@JsonDeserialize</code> / <code>ObjectMapper.readValue()</code></td></tr>
+      <tr><td><code>schemars::JsonSchema</code></td><td>Swagger <code>@Schema</code> / <code>jackson-module-jsonSchema</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>/// doc comments — Javadoc, but picked up by schemars</h3>
+
+  <p>
+    Javadoc comments (<code>/** ... */</code>) generate HTML documentation.
+    Rust's <code>///</code> doc comments do the same, but schemars also reads them
+    and includes the text as the <code>"description"</code> field in the generated
+    JSON Schema. That description is what Claude reads to understand how to fill in
+    the argument — it is not just documentation, it is a runtime contract.
+  </p>
+
+  <h3>Parameters(input): Parameters&lt;SearchInput&gt; — destructuring, with no Java equivalent</h3>
+
+  <p>
+    This is the one pattern here that has no clean Java parallel. rmcp wraps the
+    deserialized struct in a <code>Parameters&lt;T&gt;</code> container.
+    Writing <code>Parameters(input)</code> in the function signature
+    <em>destructures</em> that container: it unwraps the outer <code>Parameters</code>
+    and binds the inner value directly to the name <code>input</code>.
+  </p>
+
+  <p>
+    The closest Java 16+ equivalent is pattern matching in an <code>instanceof</code>
+    check — but in Rust, destructuring happens directly in function signatures and is
+    used everywhere. Think of it as: instead of writing <code>params.getInner()</code>
+    inside the function body, the unwrapping is declared in the parameter list.
+  </p>
+
+  <h3>format!() — String.format(), with {} instead of %s</h3>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>String.format("Searching for '%s'", query)</code></td>
+        <td><code>format!("Searching for '{}'", query)</code></td>
+      </tr>
+      <tr>
+        <td><code>"Hello " + name</code></td>
+        <td><code>format!("Hello {}", name)</code> — <code>+</code> exists but is rarely used</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Step 1 — Add serde and schemars</h2>
+
+  <p>Run these inside your dev container:</p>
+
+  <pre><code>cargo add serde --features derive
+cargo add schemars</code></pre>
+
+  <p>
+    The <code>derive</code> feature on serde enables the
+    <code>#[derive(Deserialize)]</code> macro. Without it you'd have to implement
+    the trait by hand — several hundred lines of boilerplate.
+  </p>
+
+  <h2>Step 2 — Define the input struct</h2>
+
+  <p>
+    Add this above the <code>struct KukaServer</code> definition in
+    <code>src/main.rs</code>:
+  </p>
+
+  <pre><code>#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SearchInput {
+    /// Search term to look up in the KUKA documentation
+    query: String,
+}</code></pre>
+
+  <p>The three derives do separate jobs:</p>
+
+  <ul>
+    <li><code>Debug</code> — lets you print the struct with <code>{:?}</code> for quick debugging</li>
+    <li><code>serde::Deserialize</code> — lets serde rebuild this struct from the JSON arguments</li>
+    <li><code>schemars::JsonSchema</code> — lets schemars generate the MCP input schema at compile time</li>
+  </ul>
+
+  <p>
+    The <code>///</code> doc comment on <code>query</code> is picked up by schemars
+    and becomes the <code>"description"</code> field in the JSON Schema. That is the
+    text Claude reads to understand how to fill in the argument — make it precise.
+  </p>
+
+  <h2>Step 3 — Add the search_docs tool</h2>
+
+  <p>
+    First, add <code>Parameters</code> to your <code>use rmcp::{ ... }</code> import block:
+  </p>
+
+  <pre><code>handler::server::wrapper::Parameters,</code></pre>
+
+  <p>
+    Then add this method inside the <code>#[tool_router] impl KukaServer</code> block,
+    after <code>ping</code>:
+  </p>
+
+  <pre><code>#[tool(description = "Search KUKA robot documentation for a given query")]
+fn search_docs(
+    &self,
+    Parameters(input): Parameters&lt;SearchInput&gt;,
+) -> Result&lt;CallToolResult, McpError&gt; {
+    Ok(CallToolResult::success(vec![Content::text(
+        format!("Searching for '{}' — PDF ingestion not yet implemented.", input.query),
+    )]))
+}</code></pre>
+
+  <p>
+    <code>Parameters&lt;SearchInput&gt;</code> is rmcp's wrapper type that carries the
+    deserialized tool arguments. The <code>Parameters(input)</code> in the function
+    signature is Rust <strong>destructuring</strong> — it unwraps the
+    <code>Parameters</code> wrapper and binds the inner <code>SearchInput</code>
+    directly to <code>input</code>, so you can write <code>input.query</code> rather
+    than <code>input.0.query</code>. This pattern is how rmcp 1.x passes all tool
+    parameters.
+  </p>
+
+  <p>
+    <code>format!</code> is Rust's string interpolation macro. The <code>{}</code>
+    placeholder calls the <code>Display</code> trait on <code>input.query</code>, which
+    for a <code>String</code> just prints the string contents.
+  </p>
+
+  <h2>Step 4 — Build</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    Expect a clean build. If you get an error about a missing import, check that
+    your <code>use rmcp::...</code> block at the top of the file still includes
+    <code>tool</code>, <code>tool_router</code>, and <code>tool_handler</code>.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">If you get a compile error</div>
+    <p>
+      Paste the full error output (everything starting from <code>error[E...]</code>)
+      directly into chat with Claude. The most common issue at this stage is a
+      mismatched import path after adding new dependencies.
+    </p>
+  </div>
+
+  <h2>Step 5 — Smoke-test the new tool</h2>
+
+  <p>Run the server:</p>
+
+  <pre><code>cargo run</code></pre>
+
+  <p>Send the MCP initialize handshake:</p>
+
+  <pre><code>{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}},"id":1}</code></pre>
+
+  <p>Confirm both tools appear with their schemas:</p>
+
+  <pre><code>{"jsonrpc":"2.0","method":"tools/list","params":{},"id":2}</code></pre>
+
+  <p>
+    You should see <code>search_docs</code> listed alongside <code>ping</code>,
+    with an <code>inputSchema</code> that marks <code>query</code> as a required string.
+  </p>
+
+  <p>Now call the tool with a real query:</p>
+
+  <pre><code>{"jsonrpc":"2.0","method":"tools/call","params":{"name":"search_docs","arguments":{"query":"AMR navigation"}},"id":3}</code></pre>
+
+  <p>Expected response (trimmed):</p>
+
+  <pre><code>{"result":{"content":[{"type":"text","text":"Searching for 'AMR navigation' — PDF ingestion not yet implemented."}],...}}</code></pre>
+
+  <p>Press <code>Ctrl+C</code> to stop the server when done.</p>
+
+  <div class="callout">
+    <div class="callout-label">What you just proved</div>
+    <p>
+      Your server correctly deserializes JSON arguments into a typed Rust struct and
+      uses the value. The <code>input.query</code> field is exactly what you will pass
+      to the PDF search index in Lesson 6 — the wiring is already in place.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://serde.rs/derive.html" target="_blank">
+        <strong>Serde — Derive Macros</strong>
+      </a><br>
+      The single-page reference for <code>#[derive(Serialize, Deserialize)]</code>
+      and the field attributes (<code>#[serde(rename = "...")]</code>,
+      <code>#[serde(default)]</code>, etc.) you will reach for as the struct grows.
+      Bookmark it now — you'll return to it when you need optional parameters or
+      renamed fields.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly — paste any compiler error or
+    unexpected output into chat. Good questions for this lesson:
+    "What happens if Claude sends an argument that doesn't match the schema?",
+    "Can a tool have more than one field in its <code>Parameters&lt;T&gt;</code> struct?",
+    or "How do I make a parameter optional?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0004-first-mcp-server.html">← Lesson 4: Your First MCP Server</a>
+    <a href="0006-connect-to-claude-desktop.html">Lesson 6: Connecting to Claude Desktop →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What does schemars generate for a tool parameter struct?",
+    options: [
+      "A JSON Schema that tells the MCP client what arguments are valid",
+      "A Rust trait that validates incoming JSON before deserialization",
+      "A SQL schema for storing tool call history in a database",
+      "A TypeScript type definition for use in the client application"
+    ],
+    correct: 0,
+    explanation: "schemars generates the inputSchema in the tools/list response — the AI client reads this to know exactly what to send when calling the tool."
+  },
+  {
+    question: "How does rmcp 1.x pass deserialized tool arguments to a function?",
+    options: [
+      "Via a Parameters<T> wrapper type, destructured in the function signature",
+      "Via a #[tool(param)] attribute placed on the function parameter",
+      "Via a serde::from_json call inside the function body",
+      "Via a generic type parameter on the #[tool] attribute itself"
+    ],
+    correct: 0,
+    explanation: "rmcp uses Parameters<T> as a wrapper. Writing Parameters(input): Parameters<SearchInput> in the function signature destructures the wrapper, binding the inner SearchInput directly to 'input'."
+  },
+  {
+    question: "Why does SearchInput need Deserialize but not Serialize?",
+    options: [
+      "The struct only flows inbound — it is never sent back to the client",
+      "Serialize is automatically derived whenever Deserialize is derived",
+      "Rust structs cannot implement both traits at the same time",
+      "schemars provides Serialize automatically for any JsonSchema type"
+    ],
+    correct: 0,
+    explanation: "Arguments flow from client to server — serde deserializes them into SearchInput. The server sends back a CallToolResult, which is a separate rmcp type that rmcp handles serializing."
+  },
+  {
+    question: "What does a doc comment (///) on a struct field do when schemars is in use?",
+    options: [
+      "It becomes the 'description' field in the generated JSON Schema",
+      "It is ignored by schemars but appears in rustdoc output only",
+      "It adds a validation rule that rejects empty strings",
+      "It generates a compile warning if the field is left undocumented"
+    ],
+    correct: 0,
+    explanation: "schemars reads /// comments and includes them as the description in the JSON Schema — the AI client reads these to understand how to fill in the argument correctly."
+  }
+]);
+</script>
+</body>
+</html>

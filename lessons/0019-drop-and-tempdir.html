@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 19: Drop and TempDir</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 19</div>
+    <h1>Drop and TempDir</h1>
+    <div class="lesson-meta">
+      <span>~20 minutes</span>
+      <span>Hands-on — edit, build, test in your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're fixing</h2>
+
+  <p>
+    The integration tests from <a href="0018-integration-tests.html">Lesson 18</a> call
+    <code>teardown()</code> at the end of each test to delete the temp directory. If a test
+    panics, <code>teardown()</code> is skipped — there is no <code>finally</code> block in
+    Rust — and the directory is left on disk.
+  </p>
+
+  <p>
+    This lesson replaces the manual setup/teardown pair with <code>tempfile::TempDir</code>,
+    a type that deletes its directory automatically when it goes out of scope — even during
+    a panic. The mechanism is Rust's <strong>Drop trait</strong>.
+  </p>
+
+  <h2>New concept: the Drop trait</h2>
+
+  <p>
+    Every Rust value is destroyed when it goes out of scope. If the type implements the
+    <a href="https://doc.rust-lang.org/std/ops/trait.Drop.html" target="_blank"><code>Drop</code></a>
+    trait, Rust calls its <code>drop()</code> method first — giving the type a chance to
+    release resources before the memory is freed.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>interface AutoCloseable {<br>&nbsp;&nbsp;void close();<br>}</code></td>
+        <td><code>trait Drop {<br>&nbsp;&nbsp;fn drop(&amp;mut self);<br>}</code></td>
+      </tr>
+      <tr>
+        <td><code>try (var x = new Resource()) {<br>&nbsp;&nbsp;// close() called on exit<br>}</code></td>
+        <td><code>{ let x = Resource::new();<br>&nbsp;&nbsp;// drop() called at end of block<br>}</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The key difference: Java's <code>try-with-resources</code> is opt-in syntax — you must
+    wrap the resource in a <code>try</code> block to get automatic cleanup. Rust's
+    <code>Drop</code> is automatic for every value, every time, with no special syntax
+    required. You cannot accidentally forget it.
+  </p>
+
+  <div class="diagram">
+    Java: close() called only inside try-with-resources<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;— forget the try block and close() is never called<br><br>
+    Rust: drop() called whenever the value goes out of scope<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;— there is no way to forget it
+  </div>
+
+  <p>
+    Crucially, <code>drop()</code> is also called during <strong>panic unwinding</strong>
+    — when a test fails, Rust walks the stack and drops every value in scope before
+    unwinding. This is what makes <code>TempDir</code> reliable: the directory is deleted
+    whether the test passes or panics.
+  </p>
+
+  <h2>TempDir — Drop in practice</h2>
+
+  <p>
+    The <a href="https://docs.rs/tempfile/latest/tempfile/struct.TempDir.html" target="_blank"><code>tempfile::TempDir</code></a>
+    type creates a uniquely-named temp directory on construction and implements
+    <code>Drop</code> to delete it. You never call teardown manually — you just let
+    the variable go out of scope.
+  </p>
+
+  <pre><code>// TempDir creates the directory when constructed
+let temp_dir = tempfile::TempDir::new().unwrap();
+
+// .path() returns a &Path to the directory
+println!("{}", temp_dir.path().display());
+
+// At the end of this block, Drop is called and the directory is deleted —
+// even if this block was exited via a panic
+</code></pre>
+
+  <h2>Step 1 — Add the tempfile crate</h2>
+
+  <p>
+    Run this in your dev container from the <code>mcp-server</code> directory:
+  </p>
+
+  <pre><code>cargo add tempfile</code></pre>
+
+  <p>
+    This adds <code>tempfile</code> to <code>Cargo.toml</code> under
+    <code>[dependencies]</code>. Since it is only used in tests you could add it under
+    <code>[dev-dependencies]</code> instead — dev dependencies are excluded from the
+    production binary. For now <code>[dependencies]</code> is fine.
+  </p>
+
+  <h2>Step 2 — Update the integration test module</h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code>. Replace the entire
+    <code>mod integration_tests</code> block with this updated version:
+  </p>
+
+  <pre><code>#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use std::fs;
+
+    // Creates a uniquely-named temp directory and writes one known OKF document into it.
+    // Returns TempDir — not PathBuf — so the caller owns the directory and controls
+    // when it is dropped. When TempDir goes out of scope, Drop deletes it automatically.
+    fn setup_test_bundle() -> tempfile::TempDir {
+        // TempDir::new() creates a unique directory in the system temp folder
+        let temp_dir = tempfile::TempDir::new().unwrap();
+
+        // A minimal but valid OKF document containing known searchable text
+        let doc = "\
+---
+type: technical-note
+title: Reflector Guide
+description: Test document for integration tests.
+resource: kuka-docs/test.pdf
+tags: [test]
+timestamp: 2026-01-01T00:00:00Z
+---
+
+Reflectors must be mounted at a height of 150 to 2000 mm above floor level.
+The maximum spacing between reflectors is 8 metres.";
+
+        fs::write(temp_dir.path().join("reflector-guide.md"), doc).unwrap();
+
+        // Return TempDir — Drop is NOT called here because ownership moves to the caller
+        temp_dir
+    }
+
+    #[test]
+    fn search_finds_matching_document() {
+        // temp_dir owns the directory; it is deleted when this variable goes out of scope
+        let temp_dir = setup_test_bundle();
+        unsafe { std::env::set_var("KUKA_KNOWLEDGE_DIR", temp_dir.path()); }
+
+        let server = KukaServer::new();
+        let input = SearchInput { query: "reflector height".to_string() };
+        let result = server.search_docs(Parameters(input)).unwrap();
+
+        let output = format!("{:?}", result);
+        assert!(output.contains("Reflector Guide"), "Should find the document by title");
+        assert!(output.contains("150"), "Should include excerpt containing the height value");
+
+        // temp_dir goes out of scope here — Drop called, directory deleted automatically
+    }
+
+    #[test]
+    fn search_returns_no_results_for_unknown_query() {
+        let temp_dir = setup_test_bundle();
+        unsafe { std::env::set_var("KUKA_KNOWLEDGE_DIR", temp_dir.path()); }
+
+        let server = KukaServer::new();
+        let input = SearchInput { query: "hydraulic pump".to_string() };
+        let result = server.search_docs(Parameters(input)).unwrap();
+
+        let output = format!("{:?}", result);
+        assert!(output.contains("No results found"), "Unrelated query should return no results");
+    }
+
+    #[test]
+    fn list_docs_shows_document_grouped_by_type() {
+        let temp_dir = setup_test_bundle();
+        unsafe { std::env::set_var("KUKA_KNOWLEDGE_DIR", temp_dir.path()); }
+
+        let server = KukaServer::new();
+        let result = server.list_docs().unwrap();
+
+        let output = format!("{:?}", result);
+        assert!(output.contains("Reflector Guide"), "Should list the document title");
+        assert!(output.contains("technical-note"), "Should group by type from frontmatter");
+    }
+}</code></pre>
+
+  <h3>What changed</h3>
+
+  <ul>
+    <li>
+      <code>setup_test_bundle()</code> now returns <code>tempfile::TempDir</code> instead
+      of <code>PathBuf</code>. The directory path is accessed via <code>.path()</code>
+      rather than the variable directly.
+    </li>
+    <li>
+      <code>teardown()</code> and all calls to it are gone. Cleanup is handled by
+      <code>TempDir</code>'s <code>Drop</code> implementation.
+    </li>
+    <li>
+      The comment "temp_dir goes out of scope here" marks where <code>drop()</code> is
+      implicitly called. You do not write anything — Rust handles it.
+    </li>
+  </ul>
+
+  <h2>Step 3 — Run the tests</h2>
+
+  <pre><code>cargo test integration -- --test-threads=1</code></pre>
+
+  <p>
+    All three integration tests should pass and no temp directories are left behind,
+    even if a test were to fail.
+  </p>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/std/ops/trait.Drop.html" target="_blank">
+        <strong>std::ops::Drop — Rust standard library docs</strong>
+      </a><br>
+      Documents the Drop trait. Pay attention to the section on drop order — Rust drops
+      values in the reverse order they were declared, which matters when one value borrows
+      from another. Also note that you can call <code>std::mem::drop(value)</code> to
+      drop a value early, before the end of its scope.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "Can I implement Drop on my own structs — for example to log when a value is destroyed?",
+    "What is the difference between Drop and a destructor in C++?",
+    or "What happens if drop() itself panics?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0018-integration-tests.html">← Lesson 18: Integration Tests</a>
+    <a href="0020-batch-extraction.html">Lesson 20: Batch Extraction →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "When is a value's Drop::drop() method called?",
+    options: [
+      "Only when you explicitly call std::mem::drop() on the value",
+      "When the value goes out of scope — at the closing brace of the block that owns it",
+      "Only when the program exits cleanly — panics bypass Drop entirely",
+      "When the garbage collector decides to reclaim the memory, as in Java"
+    ],
+    correct: 1,
+    explanation: "Rust calls drop() automatically at the end of the block that owns the value — no special syntax required. It is also called during panic unwinding as the stack is cleaned up. std::mem::drop() exists for the rare case where you want to drop a value before its scope ends."
+  },
+  {
+    question: "What is the closest Java equivalent of Rust's Drop trait?",
+    options: [
+      "The Object.finalize() method — called by the garbage collector before reclaiming memory",
+      "The Runnable interface — used to schedule cleanup tasks on a background thread",
+      "The Serializable interface — marks objects that can be safely stored and restored",
+      "AutoCloseable combined with try-with-resources — the JVM calls close() on scope exit"
+    ],
+    correct: 3,
+    explanation: "Drop is most similar to AutoCloseable + try-with-resources. Both guarantee a cleanup method is called when a resource goes out of its managed scope. The key difference: try-with-resources is opt-in syntax in Java, while Drop is automatic for every Rust value with no special syntax needed."
+  },
+  {
+    question: "Why does setup_test_bundle() return TempDir instead of calling drop() itself?",
+    options: [
+      "Returning TempDir transfers ownership to the caller, so drop() is called when the caller's scope ends — not the function's scope",
+      "TempDir does not implement Clone, so it cannot be used after the function returns if kept locally",
+      "Rust does not allow Drop types to be created inside helper functions — they must be created in the test function directly",
+      "Returning TempDir converts it to PathBuf automatically, which is what set_var() requires"
+    ],
+    correct: 0,
+    explanation: "When setup_test_bundle() returns TempDir, ownership moves to the caller — the TempDir is not dropped at the end of setup_test_bundle(). It is only dropped when the caller's variable (temp_dir) goes out of scope at the end of the test function. This is exactly the lifetime we want."
+  },
+  {
+    question: "What happens to TempDir when a test panics before reaching the end of the function?",
+    options: [
+      "The directory is left on disk — panic bypasses Drop the same way it bypasses teardown()",
+      "The directory is deleted — Rust unwinds the stack on panic, calling drop() on every value in scope",
+      "The test is retried automatically up to three times before the directory is cleaned up",
+      "Drop is called only if the test function is marked with #[should_panic]"
+    ],
+    correct: 1,
+    explanation: "Rust's panic unwinding walks the stack and drops every value in scope before propagating. TempDir's drop() is called during this unwinding, so the directory is deleted even when a test panics. This is the key advantage over a manual teardown() call."
+  }
+]);
+</script>
+</body>
+</html>

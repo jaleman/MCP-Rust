@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 25 — Ignoring Headers and Footers at Search Time</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <script src="../assets/quiz.js"></script>
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 25</div>
+    <h1>Ignoring Headers &amp; Footers at Search Time</h1>
+    <div class="lesson-meta">
+      <span>~25 min</span>
+      <span>Topic: HashMap → HashSet, tuple destructuring</span>
+      <span>Prerequisite: <a href="0024-mcp-resources.html">Lesson 24</a></span>
+    </div>
+  </header>
+
+  <p>
+    A PDF extracted to text carries its headers and footers on every page.
+    "KUKA Robotics GmbH — Technical Reference" might appear 50 times in a single OKF file.
+    Two things go wrong when <code>search_docs</code> sees that:
+  </p>
+  <ol>
+    <li><strong>Bad excerpt anchors</strong> — the excerpt builder collects every exact match position,
+    so it can anchor a snippet on the 23rd occurrence of the page title instead of the paragraph
+    that actually answers the query.</li>
+    <li><strong>Inflated ranking</strong> — the current score is the raw count of all term
+    occurrences. A document where your query term appears in a 50-page running header
+    outscores a short document that answers the question directly.</li>
+  </ol>
+
+  <div class="callout">
+    <div class="callout-label">Why search-time, not extraction-time</div>
+    <p>
+      The tempting fix is to strip repeated lines when writing the OKF file in
+      <code>extract.rs</code>. Don't. Some repeated lines are real content: safety warnings,
+      legal cautions, section labels like <em>"DANGER: Deactivate before maintenance."</em>
+      Once stripped from the file, they're gone forever. Filtering at search time is
+      non-lossy — the OKF files stay faithful to the source, and the filter only affects
+      which positions the search engine uses.
+    </p>
+  </div>
+
+  <h2>The plan</h2>
+
+  <p>
+    Three small helper functions, two changes to <code>search_docs</code>. No new imports —
+    <code>HashMap</code> and <code>HashSet</code> are already in scope.
+  </p>
+
+  <ol>
+    <li><code>normalize_line</code> — trim, collapse whitespace, lowercase</li>
+    <li><code>repeated_lines</code> — return a <code>HashSet</code> of every normalised line that
+    appears 3 or more times in a text</li>
+    <li><code>line_at_pos</code> — given a byte position in a string, return the whole line it sits on</li>
+    <li>In <code>search_docs</code>: filter positions through the boilerplate set before proximity scoring</li>
+    <li>In <code>search_docs</code>: replace the raw occurrence count with the filtered position count</li>
+  </ol>
+
+  <h2>normalize_line</h2>
+
+  <pre><code>// Trims, collapses internal whitespace, and lowercases a line so that
+// "  KUKA Robotics GmbH  " and "kuka robotics gmbh" count as the same line.
+fn normalize_line(s: &amp;str) -&gt; String {
+    s.trim()
+        .split_whitespace()
+        .collect::&lt;Vec&lt;_&gt;&gt;()
+        .join(" ")
+        .to_lowercase()
+}</code></pre>
+
+  <p>
+    <code>split_whitespace()</code> splits on any run of whitespace and discards empty tokens,
+    so multiple spaces, tabs, and non-breaking spaces all collapse to a single space.
+    Without this, "KUKA  Robotics" and "KUKA Robotics" would count as different lines
+    and neither would reach the threshold.
+  </p>
+
+  <h2>repeated_lines</h2>
+
+  <pre><code>// Returns a HashSet of normalised lines that appear 3 or more times in text.
+// These are the boilerplate candidates: running headers, footers, page titles.
+fn repeated_lines(text: &amp;str) -&gt; HashSet&lt;String&gt; {
+    let mut freq: HashMap&lt;String, usize&gt; = HashMap::new();
+    for line in text.lines() {
+        let norm = normalize_line(line);
+        if !norm.is_empty() {
+            *freq.entry(norm).or_insert(0) += 1;
+        }
+    }
+    freq.into_iter()
+        .filter(|(_, count)| *count &gt;= 3)
+        .map(|(line, _)| line)
+        .collect()
+}</code></pre>
+
+  <p>
+    The counting loop is the same <code>entry / or_insert</code> idiom you saw in lesson 25's
+    original draft. The new part is what happens after: the HashMap is consumed and transformed
+    into a <code>HashSet</code> in a single pipeline.
+  </p>
+
+  <h3>Breaking down the pipeline</h3>
+
+  <pre><code>freq.into_iter()              // consumes freq, yields (String, usize) tuples
+    .filter(|(_, count)| *count &gt;= 3)  // keep only frequent lines
+    .map(|(line, _)| line)    // discard the count, keep the line
+    .collect()                // Rust infers HashSet&lt;String&gt; from the return type</code></pre>
+
+  <p>
+    Two patterns here that are new:
+  </p>
+
+  <ul>
+    <li>
+      <strong>Tuple destructuring in closure parameters</strong> —
+      <code>|(_, count)|</code> names only the second field of the tuple and ignores
+      the first with <code>_</code>. This is the Rust equivalent of ignoring a field in a
+      Java record pattern.
+    </li>
+    <li>
+      <strong><code>*count</code></strong> — <code>filter</code> passes a reference to the tuple
+      (<code>&amp;(String, usize)</code>), so destructuring gives you <code>&amp;usize</code>.
+      The <code>*</code> dereferences it so you can compare it to the integer literal
+      <code>3</code>.
+    </li>
+  </ul>
+
+  <p>
+    <code>.collect()</code> doesn't need a turbofish here because the return type
+    <code>HashSet&lt;String&gt;</code> tells Rust exactly what to build.
+  </p>
+
+  <h2>line_at_pos</h2>
+
+  <pre><code>// Returns the trimmed line of text that contains the byte at position pos.
+fn line_at_pos(text: &amp;str, pos: usize) -&gt; &amp;str {
+    let line_start = text[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_end = text[pos..].find('\n').map(|i| pos + i).unwrap_or(text.len());
+    text[line_start..line_end].trim()
+}</code></pre>
+
+  <p>
+    <code>rfind</code> searches <em>backwards</em> from the end of the slice — the 'r' stands
+    for reverse. The Java equivalent is <code>String.lastIndexOf('\n', pos)</code>.
+    Slicing <code>text[..pos]</code> restricts the backward search to before the match,
+    and <code>text[pos..]</code> restricts the forward search to after it.
+  </p>
+
+  <p>
+    Slicing at <code>\n</code> boundaries is always safe — newlines are single ASCII bytes,
+    so the byte after a <code>\n</code> is always a valid UTF-8 character boundary.
+    The <code>floor_char_boundary</code> helper is not needed here.
+  </p>
+
+  <h2>Plug into search_docs — Step 1: filter positions</h2>
+
+  <p>
+    In <code>search_docs</code>, positions are currently collected and then immediately used for
+    proximity scoring. Add the boilerplate filter in between, after
+    <code>positions.sort(); positions.dedup();</code>:
+  </p>
+
+  <pre><code>positions.sort();
+positions.dedup();
+
+// Build the boilerplate set from the body text and remove any position
+// that lands on a line appearing 3+ times (running headers, footers, page titles).
+let exact_positions_before_filter = positions.len();
+let boilerplate = repeated_lines(&amp;lower[body_start..]);
+let positions: Vec&lt;usize&gt; = positions
+    .into_iter()
+    .filter(|&amp;pos| !boilerplate.contains(&amp;normalize_line(line_at_pos(&amp;lower, pos))))
+    .collect();
+
+// Skip only when exact matches existed but ALL landed on boilerplate lines.
+// If exact_positions_before_filter is 0, this was a fuzzy-only match — let
+// it fall through to the body-start excerpt fallback below.
+if exact_positions_before_filter &gt; 0 &amp;&amp; positions.is_empty() {
+    continue;
+}
+
+// Proximity scoring: rank each position by how many distinct query terms …</code></pre>
+
+  <p>
+    <code>lower[body_start..]</code> restricts frequency counting to the document body —
+    not the frontmatter. We build the boilerplate set once per document and reuse it for
+    all position checks.
+  </p>
+
+  <p>
+    The <code>let positions: Vec&lt;usize&gt; = positions.into_iter()…</code> re-binds
+    <code>positions</code> to the filtered result. This shadows the original binding —
+    everything below this line sees only the clean positions.
+  </p>
+
+  <p>
+    The guard needs to distinguish two different reasons <code>positions</code> can be empty
+    after filtering:
+  </p>
+  <ul>
+    <li><strong>All exact matches were boilerplate</strong> —
+    <code>exact_positions_before_filter &gt; 0</code> and <code>positions.is_empty()</code>.
+    Skip the document: nothing useful to show.</li>
+    <li><strong>Fuzzy-only match</strong> — <code>exact_positions_before_filter == 0</code>.
+    The query matched via edit-distance (e.g. "reflecor" → "reflector") but
+    <code>match_indices</code> found no exact substring. The body-start fallback excerpt
+    below is the right response; <code>continue</code> would incorrectly discard it.</li>
+  </ul>
+
+  <h2>Plug into search_docs — Step 2: fix the ranking score</h2>
+
+  <p>
+    The current score at the bottom of the matching block counts raw occurrences including
+    headers. Replace it with the filtered position count:
+  </p>
+
+  <pre><code>// Before — counts every occurrence including repeated headers:
+let score: usize = terms.iter().map(|term| lower.matches(*term).count()).sum();
+
+// After — counts only non-boilerplate exact match positions:
+let score = positions.len();</code></pre>
+
+  <p>
+    A document where the query term only appears in a 50-page running header will have all its
+    positions filtered out. <code>positions.is_empty()</code> will be true, and the code
+    skips that document entirely — it never appears in results at all. A short document with
+    one precise body hit scores 1 and is returned.
+  </p>
+
+  <h2>Build and test</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    Re-run a search that was previously returning bad excerpts. The excerpts should now
+    anchor on body content rather than page titles.
+  </p>
+
+  <h2>Tests</h2>
+
+  <p>Unit tests for the helpers — add to the <code>mod tests</code> block:</p>
+
+  <pre><code>#[test]
+fn repeated_lines_excludes_boilerplate() {
+    let text = "KUKA Technical Reference\n\
+                KUKA Technical Reference\n\
+                KUKA Technical Reference\n\
+                KUKA Technical Reference\n\n\
+                Reflectors must be mounted at 150mm height.\n\n\
+                KUKA Technical Reference\n\
+                KUKA Technical Reference";
+    let rep = repeated_lines(text);
+    assert!(rep.contains("kuka technical reference"));
+    assert!(!rep.contains("reflectors must be mounted at 150mm height."));
+}
+
+#[test]
+fn line_at_pos_returns_correct_line() {
+    let text = "first line\nsecond line\nthird line";
+    assert_eq!(line_at_pos(text, 15), "second line");
+}</code></pre>
+
+  <p>
+    Integration tests for <code>search_docs</code> behavior — add to the
+    <code>mod integration_tests</code> block. These call <code>search_docs_in</code>
+    (the extracted free function) directly with a temp directory path, so they
+    never touch the process-global <code>KUKA_KNOWLEDGE_DIR</code> environment variable
+    and are safe to run in parallel.
+  </p>
+
+  <pre><code>#[test]
+fn search_ignores_boilerplate_only_matches() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let doc = "---\ntype: technical-note\ntitle: Test\ndescription: .\n\
+               resource: r.pdf\ntags: []\ntimestamp: 2026-01-01T00:00:00Z\n---\n\n\
+               KUKA Manual Header\nKUKA Manual Header\nKUKA Manual Header\n\
+               KUKA Manual Header\n\nOnly reflector content here.\n\
+               KUKA Manual Header\nKUKA Manual Header";
+    fs::write(temp_dir.path().join("doc.md"), doc).unwrap();
+
+    let result = search_docs_in(temp_dir.path(), "kuka".to_string()).unwrap();
+    assert!(format!("{:?}", result).contains("No results found"));
+}
+
+#[test]
+fn search_excerpt_anchors_on_body_not_boilerplate() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let doc = "---\ntype: technical-note\ntitle: Test\ndescription: .\n\
+               resource: r.pdf\ntags: []\ntimestamp: 2026-01-01T00:00:00Z\n---\n\n\
+               Technical Guidance Note\nTechnical Guidance Note\n\
+               Technical Guidance Note\nTechnical Guidance Note\n\n\
+               Technical specifications require 150mm clearance.\n\n\
+               Technical Guidance Note\nTechnical Guidance Note";
+    fs::write(temp_dir.path().join("doc.md"), doc).unwrap();
+
+    let result = search_docs_in(temp_dir.path(), "technical specifications".to_string()).unwrap();
+    assert!(format!("{:?}", result).contains("150mm"));
+}
+
+#[test]
+fn search_returns_fuzzy_only_match() {
+    // "reflecor" (missing 't') has no exact substring match, so exact_positions_before_filter
+    // is 0. The boilerplate guard must not fire — only exact-match documents where all hits
+    // were boilerplate are skipped. Fuzzy-only matches must reach the body-start fallback.
+    let temp_dir = setup_test_bundle(); // contains "Reflectors must be mounted…"
+    let result = search_docs_in(temp_dir.path(), "reflecor".to_string()).unwrap();
+    let output = format!("{:?}", result);
+    assert!(!output.contains("No results found"), "Fuzzy-only match should be returned");
+    assert!(output.contains("Reflector Guide"), "Result should include the document title");
+}</code></pre>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <strong>
+        <a href="https://doc.rust-lang.org/std/collections/hash_map/enum.Entry.html" target="_blank">
+          HashMap Entry API — Rust Standard Library docs
+        </a>
+      </strong><br>
+      Reference for <code>.entry()</code>, <code>.or_insert()</code>, and
+      <code>.and_modify()</code>. Also worth reading:
+      <a href="https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.collect" target="_blank">Iterator::collect</a>
+      — understanding how Rust infers which collection to build from the return type.
+    </p>
+  </div>
+
+  <div class="quiz" id="quiz-l25">
+    <div class="quiz-title">Quiz — answer from memory before checking</div>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Ask your teacher.</strong> Good follow-up questions: "Why does <code>filter</code>
+    give us <code>&amp;usize</code> instead of <code>usize</code>?",
+    "Why does continue skip the document rather than just returning a score of 0?", "Could we use <code>and_modify</code> instead of <code>or_insert</code> for
+    counting?", or "Why does shadowing <code>positions</code> work rather than mutating it?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0024-mcp-resources.html">← Lesson 24: MCP Resources</a>
+    <span>Lesson 25 of the KUKA MCP series</span>
+  </nav>
+
+</div>
+
+<script>
+initQuiz("quiz-l25", [
+  {
+    question: "Why is filtering at search time safer than stripping lines in extract.rs?",
+    options: [
+      "Extraction-time stripping permanently deletes content that may legitimately repeat",
+      "Search-time filtering is faster because it only runs when a query matches",
+      "Extraction-time stripping would break the OKF frontmatter format",
+      "Search-time filtering works without a HashMap"
+    ],
+    correct: 0,
+    explanation: "Correct. Safety warnings, legal cautions, and repeated section labels are real content that can appear many times. Stripping them at extraction time loses them forever. Filtering at search time is non-lossy."
+  },
+  {
+    question: "What does freq.into_iter().filter(|(_, count)| *count >= 3).map(|(line, _)| line).collect() return?",
+    options: [
+      "A HashSet of the String keys whose count was 3 or more",
+      "A Vec of (String, usize) pairs with counts above the threshold",
+      "A HashMap with only the high-frequency entries remaining",
+      "A sorted Vec of the most frequent lines"
+    ],
+    correct: 0,
+    explanation: "Correct. into_iter() yields (String, usize) tuples. filter keeps high-count ones. map discards the count. collect() builds a HashSet<String> because that is the return type of repeated_lines."
+  },
+  {
+    question: "In line_at_pos, what does text[..pos].rfind('\\n') find?",
+    options: [
+      "The last newline before pos — the start of the line containing pos",
+      "The first newline anywhere in the text",
+      "The newline immediately after pos",
+      "The number of newlines that appear before pos"
+    ],
+    correct: 0,
+    explanation: "Correct. rfind searches backwards. Slicing text[..pos] limits the search to before the match position, so rfind('\\n') finds the nearest newline to the left — which is the end of the previous line."
+  },
+  {
+    question: "Why does the boilerplate guard check exact_positions_before_filter > 0 rather than just positions.is_empty()?",
+    options: [
+      "To preserve fuzzy-only matches, where no exact positions exist before filtering either",
+      "To avoid a division-by-zero when computing the score",
+      "Because positions.is_empty() is always false before filtering runs",
+      "To handle documents with no frontmatter"
+    ],
+    correct: 0,
+    explanation: "Correct. positions.is_empty() after filtering can mean two things: (1) all exact hits were boilerplate — skip the document, or (2) there were no exact hits at all because fuzzy matching qualified the document. The exact_positions_before_filter check distinguishes them and preserves the fuzzy fallback excerpt."
+  }
+]);
+</script>
+
+</body>
+</html>

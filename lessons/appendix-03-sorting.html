@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Appendix 3: Sorting — Java vs Rust</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Appendix 3</div>
+    <h1>Sorting — Java vs Rust</h1>
+    <div class="lesson-meta">
+      <span>Reference — return to this when sort_by() is confusing</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>Java refresh: how List.sort() works</h2>
+
+  <p>
+    In Java, <code>List.sort(Comparator)</code> takes a comparator — a function that compares
+    two elements and returns an integer. The sign of that integer tells the sort which element
+    should come first:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Return value</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>negative (e.g. -1)</td><td>first argument goes before the second</td></tr>
+      <tr><td>zero</td><td>the two elements are considered equal</td></tr>
+      <tr><td>positive (e.g. +1)</td><td>second argument goes before the first</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    The classic Java trick for sorting integers in descending order is to subtract in reverse:
+  </p>
+
+  <pre><code>// Ascending (low to high)
+list.sort((a, b) -> a.score - b.score);
+
+// Descending (high to low) — swap a and b
+list.sort((a, b) -> b.score - a.score);</code></pre>
+
+  <p>
+    When <code>b.score</code> is larger than <code>a.score</code>, <code>b - a</code> is positive,
+    which tells the sort that <code>b</code> should go first. That puts the highest score at
+    the front of the list.
+  </p>
+
+  <p>
+    Java also provides <code>Comparator.comparingInt()</code> and <code>.reversed()</code> as
+    cleaner alternatives to manual subtraction:
+  </p>
+
+  <pre><code>// Java idiomatic descending sort
+list.sort(Comparator.comparingInt((Entry e) -> e.score).reversed());</code></pre>
+
+  <h2>Rust equivalent: sort_by()</h2>
+
+  <p>
+    Rust's <a href="https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by" target="_blank"><code>Vec::sort_by()</code></a>
+    works on the same principle, but instead of returning an integer it returns an
+    <a href="https://doc.rust-lang.org/std/cmp/enum.Ordering.html" target="_blank"><code>Ordering</code></a>
+    value — an enum with three variants:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java return value</th><th>Rust Ordering variant</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td>negative</td><td><code>Ordering::Less</code></td><td>first argument goes before second</td></tr>
+      <tr><td>zero</td><td><code>Ordering::Equal</code></td><td>elements are equal</td></tr>
+      <tr><td>positive</td><td><code>Ordering::Greater</code></td><td>second argument goes before first</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    You rarely write <code>Ordering::Less</code> by hand. Instead you call
+    <code>.cmp()</code> on a value, which computes and returns the right
+    <code>Ordering</code> automatically:
+  </p>
+
+  <pre><code>// Ascending (low to high)
+results.sort_by(|a, b| a.0.cmp(&b.0));
+
+// Descending (high to low) — swap a and b, same logic as Java
+results.sort_by(|a, b| b.0.cmp(&a.0));</code></pre>
+
+  <p>
+    Comparing <code>b.0.cmp(&amp;a.0)</code> when <code>b.0 &gt; a.0</code> returns
+    <code>Ordering::Greater</code> — which tells the sort that <code>b</code> should come
+    first. This is the exact same logic as Java's <code>b.score - a.score</code>, just
+    expressed differently.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Why &amp; in .cmp(&amp;a.0)?</div>
+    <p>
+      <code>.cmp()</code> takes its argument by reference. You pass <code>&amp;a.0</code>
+      rather than <code>a.0</code> so that Rust borrows the value for comparison without
+      moving it out of the tuple — moving would consume it and make it unavailable
+      afterwards. In Java this is invisible because all objects are already references.
+    </p>
+  </div>
+
+  <h2>Worked example — sorting search results by score</h2>
+
+  <p>
+    Here is a complete before-and-after using the same data in both languages.
+    Three documents have been matched; we want the highest score first.
+  </p>
+
+  <p><strong>Java:</strong></p>
+
+  <pre><code>import java.util.*;
+
+List&lt;Map.Entry&lt;Integer, String&gt;&gt; results = new ArrayList&lt;&gt;();
+results.add(Map.entry(3,  "Fleet Operations Manual"));
+results.add(Map.entry(18, "Reflector Deployment Guide"));
+results.add(Map.entry(7,  "Safe Minimum Distances"));
+
+// Before sort: [3, 18, 7]
+results.sort((a, b) -> b.getKey() - a.getKey());
+// After sort:  [18, 7, 3]
+
+for (var entry : results) {
+    System.out.println(entry.getKey() + " — " + entry.getValue());
+}
+// 18 — Reflector Deployment Guide
+// 7  — Safe Minimum Distances
+// 3  — Fleet Operations Manual</code></pre>
+
+  <p><strong>Rust:</strong></p>
+
+  <pre><code>let mut results: Vec&lt;(usize, String)&gt; = vec![
+    (3,  "Fleet Operations Manual".to_string()),
+    (18, "Reflector Deployment Guide".to_string()),
+    (7,  "Safe Minimum Distances".to_string()),
+];
+
+// Before sort: [(3, ...), (18, ...), (7, ...)]
+results.sort_by(|a, b| b.0.cmp(&a.0));
+// After sort:  [(18, ...), (7, ...), (3, ...)]
+
+for (score, title) in &results {
+    println!("{score} — {title}");
+}
+// 18 — Reflector Deployment Guide
+// 7  — Safe Minimum Distances
+// 3  — Fleet Operations Manual</code></pre>
+
+  <p>The pattern is identical: swap the arguments to flip from ascending to descending.</p>
+
+  <h2>The cleaner alternative: sort_by_key()</h2>
+
+  <p>
+    When you are sorting by a single extracted value — as you are here (just the score) —
+    <a href="https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by_key" target="_blank"><code>sort_by_key()</code></a>
+    is cleaner than <code>sort_by()</code>. You provide a function that extracts the key
+    from each element, and Rust sorts by that key:
+  </p>
+
+  <pre><code>// Java equivalent
+results.sort(Comparator.comparingInt(e -> e.score).reversed());
+
+// Rust with sort_by_key — ascending
+results.sort_by_key(|(score, _)| *score);
+
+// Rust with sort_by_key — descending, using std::cmp::Reverse
+use std::cmp::Reverse;
+results.sort_by_key(|(score, _)| Reverse(*score));</code></pre>
+
+  <p>
+    <code>Reverse</code> is a wrapper type that flips the sort order of whatever it wraps.
+    Wrapping the score in <code>Reverse(*score)</code> makes higher scores sort first without
+    needing to write <code>b.cmp(&amp;a)</code> manually. The <code>*score</code> dereferences
+    the score (which comes out as <code>&amp;usize</code> from the destructure) back to
+    <code>usize</code> so <code>Reverse</code> can wrap it.
+  </p>
+
+  <h2>Chaining comparators</h2>
+
+  <p>
+    Java's <code>Comparator.thenComparing()</code> sorts by a second key when the first is
+    equal. Rust's equivalent is <code>.then()</code> on an <code>Ordering</code>:
+  </p>
+
+  <pre><code>// Java — sort by score descending, then by title ascending
+results.sort(Comparator.comparingInt((Entry e) -> e.score)
+    .reversed()
+    .thenComparing(e -> e.title));
+
+// Rust — same thing
+results.sort_by(|a, b| {
+    b.0.cmp(&a.0)          // compare scores descending
+      .then(a.1.cmp(&b.1)) // if equal, compare titles ascending
+});</code></pre>
+
+  <p>
+    <code>Ordering::then()</code> returns the first <code>Ordering</code> if it is not
+    <code>Equal</code>, otherwise falls through to the second. This chains comparisons
+    cleanly without nested <code>if</code> statements.
+  </p>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "When would I use sort_unstable_by() instead of sort_by()?",
+    "How do I sort a Vec of structs instead of tuples?",
+    or "What is the PartialOrd trait and when does sort() need it?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="appendix-02-iter-and-references.html">← Appendix 2: Iterators and References</a>
+    <a href="0013-result-ranking.html">← Back to Lesson 13</a>
+  </nav>
+
+</div>
+</body>
+</html>

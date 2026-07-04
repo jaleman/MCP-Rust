@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Appendix A: Ownership &amp; Borrowing</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Appendix A</div>
+    <h1>Ownership &amp; Borrowing</h1>
+    <div class="lesson-meta">
+      <span>~25 minutes</span>
+      <span>Conceptual — for Java developers</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <p>
+    This appendix exists for one reason: <code>&amp;</code> keeps appearing in the lesson
+    code and the explanation "it's a reference" doesn't fully land until you understand
+    <em>why</em> Rust needs references at all. That requires understanding ownership — the
+    concept Java never needed because it has a garbage collector.
+  </p>
+
+  <h2>Why Java never made you think about this</h2>
+
+  <p>
+    In Java, when you pass an object to a method, a reference to it is copied onto the
+    call stack. The object itself stays on the heap. When nobody holds a reference to it
+    anymore, the garbage collector eventually frees it. You never think about <em>when</em>
+    memory is freed — the GC handles it.
+  </p>
+
+  <p>
+    Rust has no garbage collector. Something else must decide when memory is freed.
+    That something is <strong>ownership</strong> — a set of rules the compiler enforces
+    at compile time, with zero runtime cost.
+  </p>
+
+  <h2>Rule 1: every value has exactly one owner</h2>
+
+  <p>
+    In Rust, every value on the heap has exactly one variable that owns it. When that
+    variable goes out of scope, the memory is freed immediately — no GC needed.
+  </p>
+
+  <pre><code>fn main() {
+    let s = String::from("hello");  // s owns this String
+}   // s goes out of scope — String is freed here, automatically</code></pre>
+
+  <p>
+    This is equivalent to Java's try-with-resources, but automatic and universal —
+    every value, always, with no syntax required.
+  </p>
+
+  <h2>Rule 2: assigning or passing a value moves ownership</h2>
+
+  <p>
+    This is the rule with no Java equivalent. When you assign a heap value to another
+    variable, or pass it to a function, <strong>ownership moves</strong>. The original
+    variable becomes invalid.
+  </p>
+
+  <pre><code>let s1 = String::from("hello");
+let s2 = s1;                 // ownership moves from s1 to s2
+
+println!("{}", s1);          // COMPILE ERROR: s1 was moved</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Why this doesn't exist in Java</div>
+    <p>
+      In Java, <code>String s2 = s1</code> copies the reference — both variables point
+      to the same object, and the GC tracks both. Rust has no GC, so it enforces that
+      only one variable owns the data at a time. Freeing memory when the owner goes out
+      of scope only works safely if there is exactly one owner.
+    </p>
+  </div>
+
+  <h2>Rule 3: you can borrow a value with &amp;</h2>
+
+  <p>
+    Moving ownership into every function would make Rust unusable — you would lose access
+    to a value the moment you passed it anywhere. <strong>Borrowing</strong> solves this:
+    <code>&amp;</code> creates a reference that lets a function read the value without
+    taking ownership. When the function returns, the borrow ends and the original owner
+    still has the value.
+  </p>
+
+  <pre><code>fn print_length(s: &amp;String) {     // borrows — does not take ownership
+    println!("{}", s.len());
+}
+
+fn main() {
+    let s = String::from("hello");
+    print_length(&amp;s);              // lend s to the function
+    println!("{}", s);             // s is still valid — we never gave it away
+}</code></pre>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Pass an object to a method — both caller and method can use it</td>
+        <td><code>fn f(s: &amp;String)</code> — caller retains ownership; function reads only</td>
+      </tr>
+      <tr>
+        <td>Pass an object — method can modify it (Java has no way to prevent this)</td>
+        <td><code>fn f(s: String)</code> — ownership moves in; caller loses access</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    In Java, passing an object always works like Rust's <code>&amp;</code> — you lend it,
+    the caller keeps the reference. The difference is that Rust <em>also</em> has moves,
+    and <code>&amp;</code> is how you explicitly opt out of moving.
+  </p>
+
+  <h2>Two kinds of borrow</h2>
+
+  <h3>&amp;T — shared (read-only) borrow</h3>
+
+  <p>
+    <code>&amp;T</code> lets you read the value. You cannot modify it. Many parts of
+    the program can hold a <code>&amp;T</code> at the same time — unlimited simultaneous
+    readers are safe.
+  </p>
+
+  <pre><code>let s = String::from("hello");
+let r1 = &amp;s;
+let r2 = &amp;s;
+println!("{} and {}", r1, r2);  // fine — two readers at once</code></pre>
+
+  <h3>&amp;mut T — mutable (read-write) borrow</h3>
+
+  <p>
+    <code>&amp;mut T</code> lets you modify the value. But there can only be
+    <strong>one</strong> mutable borrow at a time, and no shared borrows while it exists.
+  </p>
+
+  <pre><code>let mut s = String::from("hello");
+let r = &amp;mut s;
+r.push_str(" world");           // fine — we have exclusive write access
+println!("{}", s);              // fine after r is done being used</code></pre>
+
+  <pre><code>let mut s = String::from("hello");
+let r1 = &amp;s;
+let r2 = &amp;mut s;               // COMPILE ERROR: cannot borrow as mutable
+                                // because it is also borrowed as immutable</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">The borrow checker rule, stated simply</div>
+    <p>
+      At any given point in your code, you may have <strong>either</strong>:<br>
+      — any number of read-only borrows (<code>&amp;T</code>), <strong>or</strong><br>
+      — exactly one read-write borrow (<code>&amp;mut T</code>)<br><br>
+      Never both at the same time. This is what prevents data races at compile time —
+      no runtime locking needed.
+    </p>
+  </div>
+
+  <h2>String vs &amp;str — the most common source of confusion</h2>
+
+  <p>
+    Rust has two string types, and you will see both constantly:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Type</th><th>Meaning</th><th>Java analogy</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>String</code></td>
+        <td>Owned, heap-allocated string. Can grow. Has one owner.</td>
+        <td><code>new StringBuilder(...).toString()</code> — owned, mutable</td>
+      </tr>
+      <tr>
+        <td><code>&amp;str</code></td>
+        <td>Borrowed slice — a read-only window into a string. Cannot grow.</td>
+        <td>No direct equivalent — closest is a read-only <code>CharSequence</code> view</td>
+      </tr>
+      <tr>
+        <td><code>&amp;String</code></td>
+        <td>A reference to an owned String. Functions that only need to read usually accept <code>&amp;str</code> instead.</td>
+        <td>Passing a <code>String</code> reference to a method</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    String literals like <code>"hello"</code> in Rust are <code>&amp;str</code> — they are
+    baked into the binary and borrowed for the entire program lifetime. When you need an
+    owned, modifiable string (e.g., to build one dynamically), you use
+    <code>String::from("hello")</code> or <code>"hello".to_string()</code>.
+  </p>
+
+  <pre><code>let owned: String = String::from("hello");   // heap allocated, owned
+let borrowed: &amp;str = "hello";               // points into binary, borrowed
+let slice: &amp;str = &amp;owned[0..3];            // points into owned, borrowed</code></pre>
+
+  <h2>What &amp; means in the lessons</h2>
+
+  <p>
+    With this foundation, the uses of <code>&amp;</code> you have seen in the lessons make
+    sense:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Code from the lessons</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>fn ping(&amp;self)</code></td>
+        <td>Borrow the server — read it without taking ownership. Every method that reads but doesn't consume the struct uses <code>&amp;self</code>.</td>
+      </tr>
+      <tr>
+        <td><code>extract_frontmatter_field(&amp;content, "title")</code></td>
+        <td>Lend <code>content</code> to the helper function. We keep ownership and can use <code>content</code> again on the next line to extract the excerpt.</td>
+      </tr>
+      <tr>
+        <td><code>&amp;content[start..end]</code></td>
+        <td>A borrowed slice — a read-only window into <code>content</code> with no allocation. No new String is created; we just point at a range of bytes in the original.</td>
+      </tr>
+      <tr>
+        <td><code>std::fs::write(&amp;output, &amp;okf)?</code></td>
+        <td>Lend both the path and the content to the write function. Both remain usable after the call.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html" target="_blank">
+        <strong>Chapter 4: Understanding Ownership — The Rust Book</strong>
+      </a><br>
+      The definitive explanation. Read sections 4.1 (What is Ownership?), 4.2 (References
+      and Borrowing), and 4.3 (The Slice Type). Budget 45 minutes. This chapter is the
+      single most important thing to understand about Rust — everything else builds on it.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "Why does Rust need both String and &amp;str when Java just has String?",
+    "What happens if I try to return a &amp;str that points into a local variable?",
+    or "How does the borrow checker know when a borrow ends?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0010-search-excerpts.html">← Back to Lesson 10</a>
+    <span></span>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What happens to a String variable in Rust after you pass it to a function without &?",
+    options: [
+      "A copy is made — both the caller and the function have the value",
+      "Ownership moves into the function — the original variable becomes invalid",
+      "The variable is temporarily frozen until the function returns",
+      "Nothing — Rust always passes by reference like Java"
+    ],
+    correct: 1,
+    explanation: "Without &, passing a value moves ownership. The original variable can no longer be used. This is the fundamental difference from Java, where passing an object always leaves the caller's reference intact."
+  },
+  {
+    question: "How many mutable borrows (&mut) of the same value can exist at the same time?",
+    options: [
+      "Unlimited — the same as read-only borrows",
+      "Two — one for reading, one for writing",
+      "One — and no read-only borrows can exist at the same time",
+      "Zero — you must move the value to modify it"
+    ],
+    correct: 2,
+    explanation: "Exactly one &mut borrow, and no shared (&) borrows while it exists. This is the borrow checker's core rule: either many readers or one writer, never both simultaneously."
+  },
+  {
+    question: "What is &str in Rust?",
+    options: [
+      "A mutable, heap-allocated string — equivalent to Java's StringBuilder",
+      "An owned string that can be grown or shrunk at runtime",
+      "A read-only borrowed slice — a window into an existing string with no new allocation",
+      "A null-safe wrapper around a String, equivalent to Java's Optional<String>"
+    ],
+    correct: 2,
+    explanation: "&str is a borrowed, read-only view into a string — either a string literal baked into the binary or a slice of an existing String. No heap allocation happens. String is the owned version."
+  },
+  {
+    question: "In fn ping(&self), what does &self mean?",
+    options: [
+      "The method takes ownership of the struct and drops it when done",
+      "The method receives a mutable reference and can modify the struct",
+      "The method borrows the struct read-only — the caller retains ownership",
+      "The method clones the struct before running"
+    ],
+    correct: 2,
+    explanation: "&self is a read-only borrow of the struct. The method can read fields but not modify them, and the caller keeps ownership. Almost all methods that only need to inspect the struct use &self."
+  }
+]);
+</script>
+</body>
+</html>

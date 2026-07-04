@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Appendix 2: Iterators and References</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Appendix 2</div>
+    <h1>Iterators and References</h1>
+    <div class="lesson-meta">
+      <span>Reference — return to this when .iter() behaves unexpectedly</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The problem this explains</h2>
+
+  <p>
+    In <a href="0011-fuzzy-search.html">Lesson 11</a> you encountered this line:
+  </p>
+
+  <pre><code>terms.iter().find_map(|term| lower.find(*term))</code></pre>
+
+  <p>
+    The <code>*term</code> looks odd. You might expect to write <code>lower.find(term)</code>
+    — after all, <code>terms</code> is a <code>Vec&lt;&amp;str&gt;</code> and <code>term</code>
+    should be <code>&amp;str</code>. But without the <code>*</code> the compiler complains.
+    This appendix explains why.
+  </p>
+
+  <h2>What .iter() actually gives you</h2>
+
+  <p>
+    In Java, when you iterate over a <code>List&lt;String&gt;</code>, you get each
+    <code>String</code> directly:
+  </p>
+
+  <pre><code>// Java
+List&lt;String&gt; terms = List.of("reflector", "height");
+for (String term : terms) {
+    // term is a String
+}</code></pre>
+
+  <p>
+    Rust's <code>.iter()</code> works differently. It does not give you the elements — it
+    gives you <strong>references to the elements</strong>. This is because <code>.iter()</code>
+    borrows the Vec without taking ownership of it, so it can only hand out references, not
+    the values themselves.
+  </p>
+
+  <pre><code>let terms: Vec&lt;&amp;str&gt; = vec!["reflector", "height"];
+
+for term in terms.iter() {
+    // term is &&str — a reference to each &str element
+}</code></pre>
+
+  <p>
+    The element type is <code>&amp;str</code>. Iterating with <code>.iter()</code> adds one
+    more <code>&amp;</code>, giving you <code>&amp;&amp;str</code>. You never write
+    <code>&amp;&amp;str</code> yourself — Rust creates it silently behind the scenes.
+  </p>
+
+  <div class="diagram">
+    Vec&lt;&amp;str&gt; contains:  &amp;str  &amp;str  &amp;str<br>
+    .iter() yields:         &amp;&amp;str  &amp;&amp;str  &amp;&amp;str<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;↑ extra &amp; added by .iter()
+  </div>
+
+  <h2>Why does this cause a problem?</h2>
+
+  <p>
+    <code>str::find()</code> expects a pattern — specifically something that implements the
+    <code>Pattern</code> trait. <code>&amp;str</code> implements <code>Pattern</code>.
+    <code>&amp;&amp;str</code> does not. So:
+  </p>
+
+  <pre><code>lower.find(term)   // term is &&str — compiler error: &&str is not a Pattern
+lower.find(*term)  // *term is &str  — works fine</code></pre>
+
+  <h2>The * operator — peeling off one layer of reference</h2>
+
+  <p>
+    The <code>*</code> operator is called the <strong>dereference</strong> operator. It
+    removes one layer of <code>&amp;</code>:
+  </p>
+
+  <pre><code>let s: &str = "reflector";
+let r: &&str = &s;   // an extra reference added by .iter()
+
+*r   // gives back &str — one layer removed</code></pre>
+
+  <p>
+    In Java, references are invisible — you never think about whether you have a reference
+    to a reference. In Rust, every layer of indirection is explicit, and sometimes you need
+    to peel one off manually.
+  </p>
+
+  <h2>Why doesn't .all() have this problem?</h2>
+
+  <p>
+    You may have noticed that <code>.all()</code> in the same lesson does <em>not</em> need
+    <code>*term</code>:
+  </p>
+
+  <pre><code>terms.iter().all(|term| fuzzy_word_match(&amp;lower, term))</code></pre>
+
+  <p>
+    Here <code>term</code> is also <code>&amp;&amp;str</code>, but <code>fuzzy_word_match</code>
+    accepts it without a <code>*</code>. The reason is that function arguments in Rust apply
+    automatic coercions — <code>&amp;&amp;str</code> is automatically coerced to <code>&amp;str</code>
+    when passed to a function that expects <code>&amp;str</code>. Think of it as Rust silently
+    inserting the <code>*</code> for you at the call site.
+  </p>
+
+  <p>
+    <code>lower.find(term)</code> does not benefit from this coercion because <code>find</code>
+    uses a generic <code>Pattern</code> trait bound rather than a concrete <code>&amp;str</code>
+    parameter — and trait matching is stricter about types than function argument coercion.
+    This is an edge case in Rust's type system; the practical rule is:
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Practical rule</div>
+    <p>
+      When iterating over a <code>Vec&lt;&amp;str&gt;</code> with <code>.iter()</code>, each
+      element inside the closure is <code>&amp;&amp;str</code>. Passing it to a plain function
+      parameter usually works without thinking about it. Passing it to something that uses a
+      trait bound (like <code>find()</code>) may require <code>*term</code> to shed the extra
+      <code>&amp;</code>. If the compiler complains that a type doesn't implement a trait, try
+      adding <code>*</code>.
+    </p>
+  </div>
+
+  <h2>.iter() vs .into_iter()</h2>
+
+  <p>
+    There are two common ways to iterate a <code>Vec</code> in Rust, and they differ in
+    ownership:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Method</th><th>What each element is</th><th>Vec after the loop</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>.iter()</code></td>
+        <td>A reference to the element (<code>&amp;T</code>)</td>
+        <td>Still usable — you only borrowed it</td>
+      </tr>
+      <tr>
+        <td><code>.into_iter()</code></td>
+        <td>The element itself (<code>T</code>)</td>
+        <td>Consumed — cannot be used again</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <pre><code>let terms = vec!["reflector", "height"];
+
+// .iter() — borrows, Vec is still usable after
+for term in terms.iter() {
+    println!("{}", *term);  // term is &&str, need * or auto-deref in println
+}
+println!("{:?}", terms);  // fine — terms still exists
+
+// .into_iter() — consumes, each element is &str directly (no extra &)
+for term in terms.into_iter() {
+    println!("{}", term);  // term is &str, no * needed
+}
+// println!("{:?}", terms);  // ERROR — terms was moved into the iterator</code></pre>
+
+  <p>
+    In the search code, <code>.iter()</code> is the right choice because you need
+    <code>terms</code> to remain valid for the rest of the function. Using
+    <code>.into_iter()</code> would consume it on first use.
+  </p>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "When would I actually want .into_iter() instead of .iter()?",
+    "What is the IntoIterator trait and how does a for loop use it?",
+    or "Why does Rust make references explicit when Java doesn't?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="appendix-01-ownership-and-borrowing.html">← Appendix 1: Ownership and Borrowing</a>
+    <a href="0011-fuzzy-search.html">← Back to Lesson 11</a>
+  </nav>
+
+</div>
+</body>
+</html>

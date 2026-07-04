@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 4: Your First MCP Server</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 4</div>
+    <h1>Your First MCP Server</h1>
+    <div class="lesson-meta">
+      <span>~25 minutes</span>
+      <span>Hands-on — run inside your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're building</h2>
+
+  <p>
+    You have a Cargo project with <code>rmcp</code> in it. Now you'll write the
+    actual Rust code — a skeleton MCP server for your KUKA knowledge base.
+    It will expose one tool called <code>ping</code> that confirms the server
+    is alive. By the end of this lesson:
+  </p>
+
+  <ul>
+    <li>You'll have a <code>src/main.rs</code> that compiles cleanly</li>
+    <li>You'll understand what every line does and why it's there</li>
+    <li>You'll smoke-test it by sending a real MCP message and seeing a real response</li>
+  </ul>
+
+  <p>
+    This is the foundation. Once this skeleton works, Lesson 5 will replace the
+    stub <code>ping</code> tool with a real tool that queries KUKA PDFs.
+  </p>
+
+  <h2>If you know Java: the concepts in this lesson translated</h2>
+
+  <h3>async/await — Java's CompletableFuture, with cleaner syntax</h3>
+
+  <p>
+    In Java, non-blocking code looks like this:
+  </p>
+
+  <pre><code>// Java
+CompletableFuture&lt;String&gt; future = fetchDataAsync();
+future.thenAccept(result -&gt; System.out.println(result));</code></pre>
+
+  <p>
+    Rust's async/await is the same idea but reads like ordinary sequential code:
+  </p>
+
+  <pre><code>// Rust
+let result = fetch_data_async().await;
+println!("{}", result);</code></pre>
+
+  <p>
+    <code>async fn</code> marks a function as non-blocking. <code>.await</code>
+    suspends execution at that point until the result is ready — equivalent to
+    Java's <code>.get()</code> on a future, but without blocking the thread.
+    <a href="https://rust-lang.github.io/async-book/01_getting_started/02_why_async.html" target="_blank">[Why async? — Async Rust Book]</a>
+  </p>
+
+  <p>
+    <code>#[tokio::main]</code> starts the async runtime — equivalent to
+    configuring a Java <code>ForkJoinPool</code> or Spring Boot's embedded server
+    lifecycle. Without it, there is no scheduler to run async code.
+    <a href="https://tokio.rs/tokio/tutorial/hello-tokio" target="_blank">[Hello Tokio — Tokio Tutorial]</a>
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Don't go deep yet</div>
+    <p>
+      For this lesson, recognise the pattern and move on. You'll see
+      <code>#[tokio::main]</code>, <code>async fn</code>, and <code>.await</code>
+      — accept that they wire up the async machinery. We'll go deeper into Tokio
+      when concurrency is actually needed.
+    </p>
+  </div>
+
+  <h3>struct + impl — Java's class, split in two</h3>
+
+  <p>
+    Java combines data and behaviour in one <code>class</code> block. Rust separates them:
+    <code>struct</code> holds data fields; a separate <code>impl</code> block holds the methods.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>class KukaServer { ... }</code></td>
+        <td><code>struct KukaServer { ... }</code> (data only)</td>
+      </tr>
+      <tr>
+        <td>Methods inside the class body</td>
+        <td><code>impl KukaServer { fn new() ... fn ping() ... }</code></td>
+      </tr>
+      <tr>
+        <td><code>this</code> (implicit)</td>
+        <td><code>&amp;self</code> (explicit first parameter on every method)</td>
+      </tr>
+      <tr>
+        <td><code>class KukaServer implements ServerHandler</code></td>
+        <td><code>impl ServerHandler for KukaServer { ... }</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Traits — Java interfaces</h3>
+
+  <p>
+    A trait is Rust's interface. <code>ServerHandler</code> is a trait defined by rmcp;
+    implementing it on <code>KukaServer</code> is exactly like a Java class implementing
+    an interface. Default method implementations work the same way — rmcp provides
+    defaults for every protocol method except <code>get_info</code>, which you must supply.
+    <a href="https://doc.rust-lang.org/book/ch10-02-traits.html" target="_blank">[Traits — The Book, Ch. 10.2]</a>
+  </p>
+
+  <h3>Result&lt;T, E&gt; — checked return values instead of exceptions</h3>
+
+  <p>
+    Java uses exceptions for error handling. Rust has no exceptions — errors are
+    <em>return values</em> wrapped in a <code>Result</code> type:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>String ping() throws IOException</code></td>
+        <td><code>fn ping() -&gt; Result&lt;String, McpError&gt;</code></td>
+      </tr>
+      <tr>
+        <td><code>return "ok";</code></td>
+        <td><code>Ok("ok")</code> — success wraps the value</td>
+      </tr>
+      <tr>
+        <td><code>throw new IOException("bad")</code></td>
+        <td><code>Err(McpError::new("bad"))</code> — failure wraps the error</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The caller <em>must</em> handle both cases — the compiler enforces this, like a
+    checked exception that cannot be silently ignored.
+  </p>
+
+  <h3>#[derive(Clone)] — Cloneable without writing clone()</h3>
+
+  <p>
+    <code>#[derive(Clone)]</code> is like writing <code>implements Cloneable</code>
+    and providing a <code>clone()</code> method — but the compiler generates it for you.
+    rmcp requires <code>Clone</code> so it can hand copies of your server to concurrent
+    requests.
+  </p>
+
+  <h3>Macros (#[tool_router]) — annotations that generate code</h3>
+
+  <p>
+    Rust macros look like Java annotations (<code>@Override</code>, <code>@JsonProperty</code>)
+    but they are more powerful: they run at compile time and <em>generate new code</em>.
+    <code>#[tool_router]</code> reads your impl block and generates a routing table.
+    <code>#[tool_handler]</code> generates the MCP protocol methods. The closest Java
+    equivalent is <strong>Lombok</strong> — annotations that generate boilerplate at
+    compile time.
+  </p>
+
+  <h2>Two new concepts you need first</h2>
+
+  <h3>1. Async/await</h3>
+
+  <p>
+    Rust functions can be marked <code>async</code>. An async function doesn't
+    run immediately when you call it — it returns a <em>future</em>, a
+    description of work to be done later.
+    <a href="https://rust-lang.github.io/async-book/01_getting_started/02_why_async.html" target="_blank">[Why async? — Async Rust Book]</a>
+  </p>
+
+  <p>
+    To actually run a future, you write <code>.await</code> after it. Think of
+    it like placing a coffee order (calling the async fn) and then waiting at the
+    counter for it (the <code>.await</code>).
+  </p>
+
+  <p>
+    But something has to run the counter — that's <strong>Tokio</strong>, an
+    async runtime. The attribute <code>#[tokio::main]</code> on your
+    <code>main</code> function starts Tokio and lets <code>main</code> itself be
+    async. Without it, <code>await</code> wouldn't work anywhere in your program.
+    <a href="https://tokio.rs/tokio/tutorial/hello-tokio" target="_blank">[Hello Tokio — Tokio Tutorial]</a>
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">You don't need to go deep yet</div>
+    <p>
+      For this lesson, you only need to <em>recognise</em> the pattern.
+      You'll see <code>#[tokio::main]</code>, <code>async fn</code>, and
+      <code>.await</code> — just accept that they wire up the async machinery.
+      We'll go deeper into Tokio when we need to run things concurrently.
+    </p>
+  </div>
+
+  <h3>2. Traits</h3>
+
+  <p>
+    A trait in Rust is a contract: a list of methods a type must provide.
+    If you implement a trait, you're promising those methods exist.
+    Traits are Rust's version of interfaces in other languages.
+    <a href="https://doc.rust-lang.org/book/ch10-02-traits.html" target="_blank">[Traits — The Book, Ch. 10.2]</a>
+  </p>
+
+  <p>
+    <code>rmcp</code> defines a trait called <code>ServerHandler</code>.
+    By implementing it on your struct, you're telling rmcp: "here is my server —
+    it knows how to respond to MCP requests." The only method you <em>must</em>
+    provide is <code>get_info</code>, which returns the server's name and
+    capabilities. Every other protocol method has a default implementation inside
+    rmcp.
+  </p>
+
+  <h2>How rmcp structures a server</h2>
+
+  <p>
+    rmcp uses two Rust macros to wire up tools. Here's the pattern:
+  </p>
+
+  <div class="diagram">
+    <code>#[tool_router]</code> on your <strong>impl block</strong><br>
+    &nbsp;&nbsp;&nbsp;↳ marks which methods are MCP tools<br>
+    &nbsp;&nbsp;&nbsp;↳ generates a router object that maps tool names → methods<br>
+    <br>
+    <code>#[tool_handler]</code> on your <strong>ServerHandler impl</strong><br>
+    &nbsp;&nbsp;&nbsp;↳ wires the router into the MCP protocol<br>
+    &nbsp;&nbsp;&nbsp;↳ generates <code>list_tools</code> and <code>call_tool</code> responses
+  </div>
+
+  <p>
+    You write the tools. The macros handle all the JSON-RPC plumbing.
+  </p>
+
+  <h2>Step 1 — Add the missing dependencies</h2>
+
+  <p>
+    Your <code>Cargo.toml</code> has <code>rmcp</code>, but you also need
+    Tokio (the async runtime), <code>anyhow</code> (ergonomic error handling),
+    and two <code>tracing</code> crates for logging. Run these inside your
+    dev container:
+  </p>
+
+  <pre><code>cargo add tokio --features rt-multi-thread,macros
+cargo add anyhow
+cargo add tracing
+cargo add tracing-subscriber --features env-filter</code></pre>
+
+  <p>
+    <code>rt-multi-thread</code> is the Tokio scheduler;
+    <code>macros</code> enables <code>#[tokio::main]</code>.
+    Log output goes to <code>stderr</code> so it doesn't interfere with the
+    MCP JSON-RPC messages on <code>stdout</code> — that's why we'll configure
+    tracing to write there.
+  </p>
+
+  <h2>Step 2 — Write <code>src/main.rs</code></h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code> and replace everything in it with
+    the code below. We'll walk through each section right after.
+  </p>
+
+  <pre><code>use anyhow::Result;
+use rmcp::{
+    ErrorData as McpError, ServerHandler, ServiceExt,
+    handler::server::router::tool::ToolRouter,
+    model::*,
+    tool, tool_handler, tool_router,
+    transport::stdio,
+};
+
+#[derive(Clone)]
+struct KukaServer {
+    #[allow(dead_code)]
+    tool_router: ToolRouter&lt;KukaServer&gt;,
+}
+
+#[tool_router]
+impl KukaServer {
+    fn new() -> Self {
+        Self {
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    #[tool(description = "Ping the KUKA knowledge server to confirm it is running")]
+    fn ping(&amp;self) -&gt; Result&lt;CallToolResult, McpError&gt; {
+        Ok(CallToolResult::success(vec![Content::text(
+            "KUKA Knowledge server is online and ready.",
+        )]))
+    }
+}
+
+#[tool_handler]
+impl ServerHandler for KukaServer {
+    fn get_info(&amp;self) -&gt; ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+        )
+        .with_instructions(
+            "KUKA AMR robot knowledge server. \
+             Use the ping tool to confirm the server is alive.".to_string(),
+        )
+    }
+}
+
+#[tokio::main]
+async fn main() -&gt; Result&lt;()&gt; {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
+
+    tracing::info!("Starting KUKA MCP server");
+
+    let service = KukaServer::new().serve(stdio()).await?;
+    service.waiting().await?;
+    Ok(())
+}</code></pre>
+
+  <h3>Walking through the code</h3>
+
+  <p><strong>The struct</strong></p>
+  <p>
+    <code>KukaServer</code> is your server type. It holds one field:
+    <code>tool_router</code>, which is generated by the <code>#[tool_router]</code>
+    macro — it's a lookup table mapping the string <code>"ping"</code> to the
+    <code>ping</code> method. The <code>#[derive(Clone)]</code> is required by
+    rmcp so it can hand copies of your server to concurrent requests.
+  </p>
+
+  <p><strong>The tools block</strong></p>
+  <p>
+    The <code>#[tool_router]</code> attribute on the <code>impl KukaServer</code>
+    block scans every method marked <code>#[tool(...)]</code> and wires them into
+    the router. <code>fn new()</code> calls <code>Self::tool_router()</code>
+    (a method the macro generates) to build the initial router and store it.
+  </p>
+  <p>
+    <code>ping</code> takes <code>&amp;self</code> (a reference to the server, not
+    ownership) and returns a <code>Result</code>: either a
+    <code>CallToolResult</code> on success or an <code>McpError</code> on failure.
+    <code>CallToolResult::success</code> wraps a list of content blocks —
+    here, a single text block.
+  </p>
+
+  <p><strong>The ServerHandler block</strong></p>
+  <p>
+    <code>impl ServerHandler for KukaServer</code> implements the trait.
+    <code>#[tool_handler]</code> auto-generates the <code>list_tools</code> and
+    <code>call_tool</code> protocol methods by reading the tool router.
+    You only write <code>get_info</code> — everything else is handled for you.
+  </p>
+
+  <p><strong>main</strong></p>
+  <p>
+    <code>tracing_subscriber::fmt()</code> sets up structured logging to stderr.
+    The key line is <code>KukaServer::new().serve(stdio()).await?</code>:
+    it creates your server, hands it to rmcp's stdio transport (which reads
+    newline-delimited JSON from stdin and writes responses to stdout), and
+    returns a service handle. <code>service.waiting().await?</code> blocks
+    until the client closes the connection.
+  </p>
+
+  <h2>Step 3 — Build</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    You'll see Tokio, anyhow, and tracing compile for the first time alongside
+    rmcp. Expect a longer wait than usual. A successful build ends with:
+    <code>Finished dev [unoptimized + debuginfo]</code>.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">If you get compile errors</div>
+    <p>
+      Paste the full error (everything after <code>error[E...]</code>) into your
+      chat with Claude. The most common issue at this stage is a typo in an import
+      path — rmcp's module layout changed between versions and the error message
+      will point directly at the problem line.
+    </p>
+  </div>
+
+  <h2>Step 4 — Smoke-test with real MCP messages</h2>
+
+  <p>
+    Run the server:
+  </p>
+
+  <pre><code>cargo run</code></pre>
+
+  <p>
+    The terminal goes quiet — the server is waiting for input on stdin. This is
+    MCP's stdio transport in action: it speaks JSON-RPC, one message per line.
+  </p>
+
+  <h3>The initialize handshake</h3>
+
+  <p>
+    MCP is a <em>stateful</em> protocol. Before any tool call can happen, the
+    client and server must negotiate — agreeing on the protocol version and
+    exchanging capability lists. This is the <strong>initialize handshake</strong>,
+    and it must happen at the start of every session.
+  </p>
+
+  <p>
+    Paste this line and press Enter:
+  </p>
+
+  <pre><code>{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}},"id":1}</code></pre>
+
+  <p>
+    You should see a JSON response that includes <code>"result"</code>, the
+    server's capabilities, and your instructions string. That's the handshake
+    complete.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Why you always need the handshake</div>
+    <p>
+      The server will not respond to tool calls before initialization — send one
+      and it will be ignored or rejected. In production, Claude Desktop sends this
+      message automatically the moment it connects to your server, so you never
+      think about it. When testing manually over raw stdio, you send it yourself.
+      Think of it like a TCP handshake: it always happens, the software just
+      normally does it for you.
+    </p>
+  </div>
+
+  <h3>List the tools</h3>
+
+  <pre><code>{"jsonrpc":"2.0","method":"tools/list","params":{},"id":2}</code></pre>
+
+  <p>
+    You'll see <code>"ping"</code> listed with its description.
+  </p>
+
+  <h3>Call the ping tool</h3>
+
+  <p>
+    Now actually invoke it:
+  </p>
+
+  <pre><code>{"jsonrpc":"2.0","method":"tools/call","params":{"name":"ping","arguments":{}},"id":3}</code></pre>
+
+  <p>
+    Expected response:
+  </p>
+
+  <pre><code>{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"KUKA Knowledge server is online and ready."}],"isError":false}}</code></pre>
+
+  <p>
+    That <code>"text"</code> value is exactly what Claude receives when it calls
+    your tool. Press <code>Ctrl+C</code> to stop the server when done.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">What you just proved</div>
+    <p>
+      A real MCP client sends exactly these same three messages — initialize,
+      tools/list, tools/call — over stdio. Your server speaks the full protocol
+      correctly, from handshake through to a tool response.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://tokio.rs/tokio/tutorial/hello-tokio" target="_blank">
+        <strong>Hello Tokio — Tokio Tutorial</strong>
+      </a><br>
+      The official first lesson of the Tokio tutorial. Read it now to cement the
+      async/await mental model. It takes about 10 minutes and uses a TCP echo
+      server as an example — the pattern is identical to what you just wrote.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly — paste any compiler error or
+    confusing output. Good questions to ask: "Why does the tool return
+    <code>Result&lt;CallToolResult, McpError&gt;</code>?",
+    "What does <code>model::*</code> import?", or
+    "How does <code>#[tool_router]</code> know which methods to include?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0003-cargo-fundamentals.html">← Lesson 3: Cargo Fundamentals</a>
+    <a href="0005-tools-with-parameters.html">Lesson 5: Tools with Parameters →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: 'What does #[tokio::main] do?',
+    options: [
+      'Imports the tokio crate so you can use it in your file',
+      'Starts the Tokio async runtime and lets main be async',
+      'Marks all functions in the file as async automatically',
+      'Tells Cargo to compile tokio with full feature flags'
+    ],
+    correct: 1,
+    explanation: 'It transforms main into a Tokio-managed entry point — without it, .await would have no runtime to execute on.'
+  },
+  {
+    question: 'What does #[tool_router] generate when placed on an impl block?',
+    options: [
+      'A JSON schema for every tool method in the block',
+      'A router object that maps tool names to handler methods',
+      'An HTTP route table for serving tools over the network',
+      'A derive macro that serializes the struct to JSON'
+    ],
+    correct: 1,
+    explanation: 'It scans the impl block for #[tool] methods and builds a lookup table (ToolRouter) mapping name strings to those methods.'
+  },
+  {
+    question: 'Why does #[tool_handler] go on the ServerHandler impl, not the tool impl?',
+    options: [
+      'It generates the list_tools and call_tool MCP protocol responses',
+      'It is where the Tokio runtime registers async tool methods',
+      'It derives Clone so rmcp can copy the server between threads',
+      'It prevents tools from running unless the client is authenticated'
+    ],
+    correct: 0,
+    explanation: '#[tool_handler] generates the MCP protocol methods (list_tools, call_tool) by wiring the tool_router into the ServerHandler trait.'
+  },
+  {
+    question: 'Why is log output written to stderr instead of stdout?',
+    options: [
+      'Tokio requires all async output to go to stderr by convention',
+      'MCP messages travel over stdout — mixing logs there would corrupt the protocol',
+      'The tracing crate does not support writing to stdout',
+      'Rust\'s println! macro is blocked inside async functions'
+    ],
+    correct: 1,
+    explanation: 'The stdio transport reads JSON-RPC from stdin and writes responses to stdout. Any non-MCP output on stdout would break the protocol parser on the client side.'
+  }
+]);
+</script>
+</body>
+</html>

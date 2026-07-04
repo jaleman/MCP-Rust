@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 11: Fuzzy Search</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 11</div>
+    <h1>Fuzzy Search</h1>
+    <div class="lesson-meta">
+      <span>~25 minutes</span>
+      <span>Hands-on — edit, build, test in your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're fixing</h2>
+
+  <p>
+    Right now <code>search_docs</code> does exact substring matching. Type "reflecor" instead of
+    "reflector" and you get nothing. Ask about "reflector height" and it only matches if those two
+    words appear consecutively — "reflector mounting height" would slip through.
+  </p>
+
+  <p>
+    This lesson adds two connected improvements:
+  </p>
+
+  <ol>
+    <li>
+      <strong>Multi-term search</strong> — the query is split into individual words and the document
+      must contain <em>all</em> of them (anywhere in the text, not just side-by-side).
+    </li>
+    <li>
+      <strong>Fuzzy matching</strong> — for each word in the query, if an exact match fails, the
+      server checks whether any word in the document is close enough (within 1–2 typos) to count.
+    </li>
+  </ol>
+
+  <div class="diagram">
+    Before: query "reflecor height" → <strong>no results</strong> (exact substring not found)<br><br>
+    After:&nbsp; query "reflecor height"<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"reflecor" ≈ "reflector" (edit distance 1) ✓<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"height" found exactly ✓<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ Reflector Deployment Guide returned
+  </div>
+
+  <h2>New concepts — translated from Java</h2>
+
+  <h3>Concept 1: Adding a crate dependency (≈ adding a Maven dependency)</h3>
+
+  <p>
+    Rust's package registry is <a href="https://crates.io" target="_blank">crates.io</a> — the
+    equivalent of Maven Central. You declare a dependency in <code>Cargo.toml</code> and Cargo
+    downloads and builds it automatically. Compared to Maven, there is no separate "resolve" step
+    — <code>cargo build</code> handles everything.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Maven (pom.xml)</th><th>Cargo (Cargo.toml)</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>&lt;dependency&gt;<br>&nbsp;&nbsp;&lt;groupId&gt;org.apache.commons&lt;/groupId&gt;<br>&nbsp;&nbsp;&lt;artifactId&gt;commons-text&lt;/artifactId&gt;<br>&nbsp;&nbsp;&lt;version&gt;1.12.0&lt;/version&gt;<br>&lt;/dependency&gt;</code></td>
+        <td><code>strsim = "0.11"</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The crate we need is
+    <a href="https://docs.rs/strsim/latest/strsim/" target="_blank"><code>strsim</code></a> —
+    string similarity metrics. It provides <code>levenshtein(a, b)</code>, which counts the minimum
+    number of single-character insertions, deletions, or substitutions needed to turn string
+    <code>a</code> into string <code>b</code>. That count is the <em>edit distance</em>.
+  </p>
+
+  <pre><code>// "reflecor" → "reflector": insert one "t" → distance = 1
+strsim::levenshtein("reflecor", "reflector")  // returns 1
+
+// "distanse" → "distance": substitute "e"→"c", "a"→"e" → distance = 2
+strsim::levenshtein("distanse", "distance")   // returns 2
+
+// identical strings
+strsim::levenshtein("reflector", "reflector") // returns 0</code></pre>
+
+  <h3>Concept 2: Splitting a string into words — <code>.split_whitespace()</code></h3>
+
+  <p>
+    To handle multi-word queries we first need to break the query string into its constituent
+    words. Java's equivalent is <code>query.trim().split("\\s+")</code>; Rust has a dedicated
+    method that does the same thing and handles all whitespace types including tabs and
+    multiple spaces:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>String[] terms = query.trim().split("\\s+");</code></td>
+        <td><code>let terms: Vec&lt;&amp;str&gt; = query.split_whitespace().collect();</code></td>
+      </tr>
+      <tr>
+        <td><code>Arrays.stream(terms).allMatch(t -&gt; matches(doc, t))</code></td>
+        <td><code>terms.iter().all(|t| fuzzy_word_match(&amp;lower, t))</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    <a href="https://doc.rust-lang.org/std/primitive.str.html#method.split_whitespace" target="_blank"><code>.split_whitespace()</code></a>
+    returns a lazy iterator over the words. <code>.collect()</code> materialises it into a
+    <code>Vec&lt;&amp;str&gt;</code> — same as Java's <code>toList()</code>.
+  </p>
+
+  <p>
+    <a href="https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.all" target="_blank"><code>.all(|item| condition)</code></a>
+    short-circuits to <code>false</code> the moment one element fails the test — just like
+    Java's <code>Stream.allMatch()</code>. A document only proceeds to the excerpt stage if
+    <em>every</em> query word matches.
+  </p>
+
+  <h3>Concept 3: Checking if <em>any</em> word in a document is close enough — <code>.any()</code></h3>
+
+  <p>
+    For each query term we loop over every word in the document and ask: "is this word within
+    the edit-distance threshold?" If <em>any</em> document word passes, the term counts as matched.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Arrays.stream(docWords).anyMatch(w -&gt; distance(w, term) &lt;= threshold)</code></td>
+        <td><code>doc_lower.split_whitespace().any(|word| levenshtein(word, term) &lt;= threshold)</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    <a href="https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.any" target="_blank"><code>.any(|item| condition)</code></a>
+    is the complement of <code>.all()</code>: it short-circuits to <code>true</code> the moment
+    one element passes — equivalent to Java's <code>Stream.anyMatch()</code>.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Choosing the edit-distance threshold</div>
+    <p>
+      A threshold of 1 allows one typo ("reflecor" → "reflector"). A threshold of 2 allows two.
+      But applying the same threshold to a 3-letter word like "the" or "and" would cause massive
+      false positives — almost everything is within 2 edits of "the". The helper function below
+      skips fuzzy matching entirely for terms of 3 characters or fewer, and uses a threshold of
+      1 for medium-length words and 2 for long words.
+    </p>
+  </div>
+
+  <h2>Step 1 — Add the <code>strsim</code> dependency</h2>
+
+  <p>Open <code>mcp-server/Cargo.toml</code>. Add one line to <code>[dependencies]</code>:</p>
+
+  <pre><code>[dependencies]
+anyhow = "1.0.103"
+pdf-extract = "0.12.0"
+rmcp = { version = "1.8.0", features = ["macros", "transport-io"] }
+schemars = "1.2.1"
+serde = { version = "1.0.228", features = ["derive"] }
+<strong>strsim = "0.11"</strong>
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }</code></pre>
+
+  <p>
+    Cargo downloads crates alphabetically by convention — keeping the list sorted makes it easier
+    to scan. The version <code>"0.11"</code> means "any 0.11.x release" — Cargo's semver rules
+    won't auto-upgrade to a breaking 1.0 without you changing this line.
+  </p>
+
+  <h2>Step 2 — Add the <code>use</code> declaration and helper function</h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code>. At the very top, with the other <code>use</code>
+    declarations, add:
+  </p>
+
+  <pre><code>use strsim::levenshtein;</code></pre>
+
+  <p>
+    Then, anywhere outside the <code>impl</code> block (for example, just above the
+    <code>struct KukaServer</code> line), add this helper function:
+  </p>
+
+  <pre><code>fn fuzzy_word_match(doc_lower: &str, term: &str) -> bool {
+    // Fast path: exact substring match anywhere in the document
+    if doc_lower.contains(term) {
+        return true;
+    }
+    // Short terms produce too many false positives when fuzzy-matched
+    if term.len() <= 3 {
+        return false;
+    }
+    let threshold = if term.len() <= 7 { 1 } else { 2 };
+    doc_lower
+        .split_whitespace()
+        .any(|word| levenshtein(word, term) <= threshold)
+}</code></pre>
+
+  <h3>Reading the helper function</h3>
+
+  <ul>
+    <li>
+      <code>fn fuzzy_word_match(doc_lower: &amp;str, term: &amp;str) -> bool</code><br>
+      A free function (not a method on a struct) that takes two string references and returns a boolean.
+      In Java: <code>private static boolean fuzzyWordMatch(String docLower, String term)</code>.
+    </li>
+    <li>
+      <code>if ... { return true; }</code><br>
+      An early return — exactly the same as Java's <code>if (...) return true;</code>. Rust
+      lets you write this without a semicolon too (the last expression in a block is the return
+      value), but explicit <code>return</code> is clearer here.
+    </li>
+    <li>
+      <code>let threshold = if term.len() &lt;= 7 { 1 } else { 2 };</code><br>
+      In Rust, <code>if/else</code> is an expression — it produces a value. This is the
+      equivalent of Java's ternary: <code>int threshold = term.length() &lt;= 7 ? 1 : 2;</code>.
+    </li>
+    <li>
+      <code>doc_lower.split_whitespace().any(|word| levenshtein(word, term) &lt;= threshold)</code><br>
+      The last expression in the function with no semicolon — this is its return value.
+      Rust functions implicitly return the last expression if there is no <code>;</code>.
+    </li>
+  </ul>
+
+  <h2>Step 3 — Update <code>search_docs</code></h2>
+
+  <p>
+    Replace the body of <code>search_docs</code>. The changes are: split the query into terms,
+    use <code>.all()</code> with the helper instead of a single <code>lower.find()</code>, and
+    compute the excerpt position from whichever term has an exact match.
+  </p>
+
+  <p><strong>Before (the current inner block):</strong></p>
+
+  <pre><code>if let Ok(content) = std::fs::read_to_string(&amp;path) {
+    let lower = content.to_lowercase();
+    if let Some(pos) = lower.find(&amp;query) {
+        let title = extract_frontmatter_field(&amp;content, "title").unwrap_or_else(|| {
+            path.file_stem().unwrap().to_string_lossy().to_string()
+        });
+        let resource = extract_frontmatter_field(&amp;content, "resource").unwrap_or_default();
+
+        let start = pos.saturating_sub(200);
+        let end = (pos + query.len() + 400).min(content.len());
+        let excerpt = content[start..end].trim();
+
+        results.push(format!("• {title}\n  Source: {resource}\n\n  ...{excerpt}..."));
+    }
+}</code></pre>
+
+  <p><strong>After:</strong></p>
+
+  <pre><code>if let Ok(content) = std::fs::read_to_string(&amp;path) {
+    let lower = content.to_lowercase();
+
+    if terms.iter().all(|term| fuzzy_word_match(&amp;lower, term)) {
+        let title = extract_frontmatter_field(&amp;content, "title").unwrap_or_else(|| {
+            path.file_stem().unwrap().to_string_lossy().to_string()
+        });
+        let resource = extract_frontmatter_field(&amp;content, "resource").unwrap_or_default();
+
+        // Anchor the excerpt at the first term that has an exact substring match.
+        // Falls back to the document start if all matches were fuzzy-only.
+        let pos = terms.iter().find_map(|term| lower.find(*term)).unwrap_or(0);
+        let start = pos.saturating_sub(200);
+        let end = (pos + 400).min(content.len());
+        let excerpt = content[start..end].trim();
+
+        results.push(format!("• {title}\n  Source: {resource}\n\n  ...{excerpt}..."));
+    }
+}</code></pre>
+
+  <p>
+    You also need to move the <code>let terms</code> line to just after the <code>let query</code>
+    line, so that <code>terms</code> is in scope for the inner loop. Update the top of
+    <code>search_docs</code>:
+  </p>
+
+  <pre><code>let knowledge_dir = std::path::Path::new("knowledge");
+let query = input.query.to_lowercase();
+let terms: Vec&lt;&amp;str&gt; = query.split_whitespace().collect();
+let mut results: Vec&lt;String&gt; = Vec::new();</code></pre>
+
+  <h3>What changed and why</h3>
+
+  <ul>
+    <li>
+      <code>if let Some(pos) = lower.find(&amp;query)</code> is replaced by
+      <code>if terms.iter().all(|term| fuzzy_word_match(&amp;lower, term))</code>.
+      The old version required the entire query string to appear verbatim. The new version
+      requires each word to appear, either exactly or within the edit-distance threshold.
+    </li>
+    <li>
+      <code>terms.iter().find_map(|term| lower.find(*term))</code> finds the position of
+      the first query word that has an exact substring match — used to anchor the excerpt.
+      The <code>*term</code> is needed because <code>.iter()</code> silently adds an extra
+      layer of borrowing as it loops — so <code>term</code> inside the closure is slightly
+      more indirect than you would expect, and <code>lower.find()</code> won't accept it
+      directly. Writing <code>*term</code> peels that layer back. This is a recurring Rust
+      pattern worth understanding; see
+      <a href="../lessons/appendix-02-iter-and-references.html">Appendix 2: Iterators and References</a>
+      for the full explanation.
+      If all matches were fuzzy-only, <code>unwrap_or(0)</code> starts the excerpt at the
+      document beginning.
+    </li>
+    <li>
+      The excerpt window is simplified to a flat <code>+400</code> lookahead. With multi-term
+      queries the matched region may span a large area anyway, so a fixed window is clearer.
+    </li>
+  </ul>
+
+  <h2>Step 4 — Build and test</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    The first build after adding <code>strsim</code> will download and compile the crate. Expect
+    a few extra seconds; subsequent builds are cached.
+  </p>
+
+  <p>
+    Restart the MCP server and try a deliberately misspelled query:
+  </p>
+
+  <pre><code>What is the minimum reflecor mounting height?</code></pre>
+
+  <p>
+    You should get a result even though "reflecor" is not a real word. Also try a multi-word query
+    where the words appear separately in the document:
+  </p>
+
+  <pre><code>What is the warning zone distance for AMR robots?</code></pre>
+
+  <p>
+    Both "warning" and "zone" appear in the safety document — the search should find and return the
+    relevant passage.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Search can only find what is in the bundle</div>
+    <p>
+      The query "What are the minimum distances for KMP robots?" fails — not because the search
+      is broken, but because the OKF document (<code>knowledge/safe-minimum-distances.md</code>)
+      describes the <em>categories</em> of distances (protective stop, warning zone) but does not
+      include the actual numeric values from the PDF. Search cannot return information that was
+      never written into the bundle.
+    </p>
+    <p>
+      Additionally, "kmp" is only 3 characters, so the helper skips fuzzy matching and requires an
+      exact match — but the safety document uses "AMR", not "KMP". The fix for both issues is to
+      enrich the OKF document: add the specific numeric values extracted from the source PDF, and
+      include model names like "KMP 1500" and "KMP 3000" so they become searchable terms.
+    </p>
+  </div>
+
+  <div class="callout">
+    <div class="callout-label">Performance note</div>
+    <p>
+      For each query term that fails an exact match, the helper function iterates over every
+      word in the document and calls <code>levenshtein()</code> — an O(m×n) operation per word
+      pair. For KUKA's small knowledge bundle this is instant. If the bundle ever grows to
+      thousands of large documents, the right fix is to pre-index words at load time, not to
+      skip fuzzy matching entirely.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://docs.rs/strsim/latest/strsim/" target="_blank">
+        <strong>strsim crate — docs.rs</strong>
+      </a><br>
+      Documents every metric the crate provides: Levenshtein, Jaro, Jaro-Winkler, and others.
+      <code>normalized_levenshtein()</code> is worth knowing — it returns a 0.0–1.0 similarity
+      score rather than a raw edit count, which makes threshold-setting easier when query words
+      vary widely in length.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "How would I rank results by how many query terms matched?",
+    "What is normalized Levenshtein distance and when would I use it instead?",
+    "How do I write a unit test for fuzzy_word_match in Rust?",
+    or "Why does find_map use *term instead of term?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0010-search-excerpts.html">← Lesson 10: Search Excerpts</a>
+    <a href="0012-stop-words.html">Lesson 12: Stop Word Filtering →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What is the Levenshtein (edit) distance between \"reflecor\" and \"reflector\"?",
+    options: [
+      "0 — the strings are identical in every character position",
+      "1 — one character insertion separates the two strings",
+      "2 — two character substitutions are required to convert them",
+      "3 — three separate edit operations would be needed"
+    ],
+    correct: 1,
+    explanation: "\"reflector\" has 9 characters; \"reflecor\" has 8. One insertion (adding the missing 't') transforms \"reflecor\" into \"reflector\". Edit distance = 1."
+  },
+  {
+    question: "terms.iter().all(|t| fuzzy_word_match(&lower, t)) is called on a document matching 3 of 4 query terms. What does it return?",
+    options: [
+      "true — more than half the query terms matched",
+      "Some(3) — the number of terms that matched",
+      "false — every term must match for all() to return true",
+      "true — it short-circuits after finding three consecutive matches"
+    ],
+    correct: 2,
+    explanation: "all() returns true only if the predicate holds for every element. If even one term fails fuzzy_word_match, all() short-circuits and returns false. The document is excluded from results."
+  },
+  {
+    question: "Why does fuzzy_word_match return false immediately when term.len() <= 3?",
+    options: [
+      "Short terms match too many unrelated words, producing too many false positives",
+      "levenshtein() is undefined for strings shorter than 4 characters",
+      "strsim::levenshtein() panics on short strings in debug builds",
+      "The threshold formula would produce a negative value for terms under 4 chars"
+    ],
+    correct: 0,
+    explanation: "A word like \"the\" or \"arm\" is within edit distance 1 or 2 of hundreds of other short words. Fuzzy-matching short terms would return almost every document. Requiring an exact match for short terms keeps precision high."
+  },
+  {
+    question: "In the expression terms.iter().find_map(|term| lower.find(*term)), what does the * in *term do?",
+    options: [
+      "It multiplies the term index by the string length for an offset calculation",
+      "It converts the term from a char iterator into a string slice",
+      "It unwraps the Option returned by find(), panicking if None",
+      "It dereferences &&str (a reference to a reference) into &str, which find() can use as a pattern"
+    ],
+    correct: 3,
+    explanation: "terms is Vec<&str>. terms.iter() yields &&str — a reference to each &str element. lower.find() expects a Pattern, which &str implements but &&str does not automatically satisfy. The * operator dereferences once, converting &&str to &str."
+  }
+]);
+</script>
+</body>
+</html>

@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 20: Batch Extraction</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 20</div>
+    <h1>Batch Extraction</h1>
+    <div class="lesson-meta">
+      <span>~30 minutes</span>
+      <span>Hands-on — edit, build, cross-compile, run on Windows</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're building</h2>
+
+  <p>
+    <code>extract.rs</code> currently has the PDF path hardcoded and only processes one
+    file. This lesson turns it into a proper Windows CLI tool that takes two explicit
+    arguments — the input (a single PDF or a directory) and the output directory — and
+    cross-compiles it to a <code>.exe</code> you can run directly on Windows without
+    Cargo or Rust installed.
+  </p>
+
+  <pre><code># Batch migration — all 16 PDFs at once
+extract.exe kuka-docs\ knowledge\
+
+# Add one new document later
+extract.exe kuka-docs\new-manual.pdf knowledge\</code></pre>
+
+  <div class="diagram">
+    D:\projects\KUKA\<br>
+    ├── extract.exe&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← tool lives here<br>
+    ├── kuka-docs\&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← source PDFs<br>
+    └── knowledge\&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← OKF output files
+  </div>
+
+  <h2>New concepts — translated from Java</h2>
+
+  <h3>Concept 1: Reading multiple CLI arguments with args().skip()</h3>
+
+  <p>
+    <code>std::env::args()</code> returns an iterator. <code>.skip(1)</code> discards the
+    binary name at index 0, leaving only user-supplied arguments. Calling <code>.next()</code>
+    twice on the iterator retrieves the first and second arguments in order.
+  </p>
+
+  <pre><code>// Java: arguments arrive as a pre-built array
+// public static void main(String[] args) {
+//     String input  = args[0];
+//     String output = args[1];
+// }
+
+// Rust: arguments come from an iterator; skip(1) drops the binary name
+let mut args = std::env::args().skip(1);
+let input_arg  = args.next(); // first user argument  — Option&lt;String&gt;
+let output_arg = args.next(); // second user argument — Option&lt;String&gt;</code></pre>
+
+  <p>
+    Both calls return <code>Option&lt;String&gt;</code> — <code>Some(value)</code> if the
+    argument was supplied, <code>None</code> if the user didn't provide it. Matching on
+    both at once lets you check for missing arguments in one step:
+  </p>
+
+  <pre><code>// Match on the tuple of both Options simultaneously.
+// Only the (Some, Some) arm is a valid call — anything else prints usage and exits.
+let (input_arg, output_arg) = match (args.next(), args.next()) {
+    (Some(i), Some(o)) => (i, o),
+    _ => {
+        eprintln!("Usage: extract &lt;pdf-file-or-directory&gt; &lt;output-dir&gt;");
+        std::process::exit(1);
+    }
+};</code></pre>
+
+  <h3>Concept 2: Cross-compiling to Windows from Linux</h3>
+
+  <p>
+    Cross-compilation means building a binary for a different OS than the one you're
+    compiling on. Your dev container runs Linux; you want a Windows <code>.exe</code>.
+    Rust supports this natively through <em>targets</em> — named combinations of OS,
+    CPU, and toolchain.
+  </p>
+
+  <p>
+    The Windows GNU target (<code>x86_64-pc-windows-gnu</code>) uses the open-source
+    MinGW toolchain, which is straightforward to install on Linux. The alternative
+    (<code>x86_64-pc-windows-msvc</code>) requires the Windows SDK and is not practical
+    to set up in a Linux container.
+  </p>
+
+  <h2>Step 1 — Replace extract.rs</h2>
+
+  <p>
+    Replace the entire contents of <code>mcp-server/src/extract.rs</code> with:
+  </p>
+
+  <pre><code>use anyhow::Result;
+use std::path::Path;
+
+// Standalone binary that extracts KUKA PDFs to OKF markdown files.
+//
+// Usage:
+//   extract &lt;input&gt; &lt;output-dir&gt;
+//
+//   &lt;input&gt;      — a single PDF file or a directory of PDFs
+//   &lt;output-dir&gt; — the knowledge/ directory to write OKF files into
+fn main() {
+    let mut args = std::env::args().skip(1); // skip the binary name at index 0
+
+    // Require exactly two arguments — input path and output directory
+    let (input_arg, output_arg) = match (args.next(), args.next()) {
+        (Some(i), Some(o)) => (i, o),
+        _ => {
+            eprintln!("Usage: extract &lt;pdf-file-or-directory&gt; &lt;output-dir&gt;");
+            eprintln!("Example: extract kuka-docs\\ knowledge\\");
+            std::process::exit(1);
+        }
+    };
+
+    let input = Path::new(&input_arg);
+    let knowledge_dir = Path::new(&output_arg);
+
+    // Verify the output directory exists before processing any files
+    if !knowledge_dir.is_dir() {
+        eprintln!("Output directory does not exist: {}", knowledge_dir.display());
+        std::process::exit(1);
+    }
+
+    if input.is_file() {
+        // Single-file mode — exit non-zero on failure so callers can detect it
+        if let Err(e) = process_pdf(input, knowledge_dir) {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    } else if input.is_dir() {
+        // Batch mode — process every PDF, logging failures and continuing
+        let entries = std::fs::read_dir(input).unwrap_or_else(|e| {
+            eprintln!("Cannot read directory: {e}");
+            std::process::exit(1);
+        });
+
+        let mut ok: usize = 0;
+        let mut failed: usize = 0;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            // Skip non-PDF files silently
+            if path.extension().and_then(|e| e.to_str()) != Some("pdf") {
+                continue;
+            }
+
+            // Match on the result so one bad PDF does not abort the batch
+            match process_pdf(&path, knowledge_dir) {
+                Ok(()) => ok += 1,
+                Err(e) => {
+                    eprintln!("Skipping {}: {e}", path.display());
+                    failed += 1;
+                }
+            }
+        }
+
+        println!("\nDone: {ok} extracted, {failed} failed.");
+    } else {
+        eprintln!("Input path not found: {}", input.display());
+        std::process::exit(1);
+    }
+}
+
+// Extracts text from a single PDF and writes it as an OKF markdown file.
+// Returns Ok(()) on success or an error the caller can log and continue from.
+fn process_pdf(pdf_path: &Path, knowledge_dir: &Path) -> Result&lt;()&gt; {
+    println!("Extracting: {}", pdf_path.display());
+
+    // Extract all text — ? propagates any error back to the caller
+    let text = pdf_extract::extract_text(pdf_path)?;
+
+    // Build the output filename: lowercase with spaces replaced by dashes
+    let stem = pdf_path.file_stem().unwrap().to_string_lossy();
+    let filename = pdf_path.file_name().unwrap().to_string_lossy();
+    let slug = stem
+        .to_lowercase()
+        .replace(' ', "-")
+        .replace(['.', '(', ')'], ""); // strip punctuation that would break file paths
+
+    // Write the OKF frontmatter block followed by the extracted text body
+    let okf = format!(
+"---
+type: technical-note
+title: {stem}
+description: Extracted from KUKA documentation.
+resource: kuka-docs/{filename}
+tags: [extracted, technical-note]
+timestamp: 2026-06-26T00:00:00Z
+---
+
+{body}",
+        stem = stem,
+        filename = filename,
+        body = text.trim(),
+    );
+
+    let output = knowledge_dir.join(format!("{slug}.md"));
+    std::fs::write(&output, &okf)?;
+    println!("  → {}", output.display());
+
+    Ok(())
+}</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Known limitation: headers and footers</div>
+    <p>
+      <code>pdf-extract</code> extracts all text from a PDF including page headers and
+      footers. For a KUKA technical note, every page typically has a header repeating the
+      document title and revision number, and a footer with the page number and copyright.
+      These repeated strings get extracted into the OKF body alongside the real content.
+    </p>
+    <p>
+      The practical effect: search terms like "mqtt" or "payload" appear hundreds of times
+      throughout a large document — once in every page header — rather than only in the
+      sections where they are meaningfully discussed. This can cause the search server to
+      return excerpts anchored on header lines rather than on the actual answer content.
+    </p>
+    <p>
+      The search server compensates with proximity scoring (returning windows where
+      multiple query terms co-occur), but the root fix is cleaner extraction. The
+      <code>lopdf</code> crate exposes text position coordinates on the page, which would
+      allow header and footer regions to be identified and stripped during extraction.
+      This is planned as a future improvement once the current bundle is validated.
+    </p>
+  </div>
+
+  <h2>Step 2 — Build and test on Linux first</h2>
+
+  <pre><code>cargo build --bin extract</code></pre>
+
+  <p>Verify both modes work before cross-compiling:</p>
+
+  <pre><code># Test missing arguments — should print usage
+cargo run --bin extract
+
+# Test single file
+cargo run --bin extract -- ../kuka-docs/some-file.pdf ../knowledge/
+
+# Test batch
+cargo run --bin extract -- ../kuka-docs/ ../knowledge/</code></pre>
+
+  <h2>Step 3 — Cross-compile to Windows</h2>
+
+  <p>
+    <code>mingw-w64</code> and the <code>x86_64-pc-windows-gnu</code> Rust target are both
+    pre-installed by the devcontainer's <code>postCreateCommand</code> — nothing to set up
+    manually. If you're ever on a container that doesn't have them:
+  </p>
+
+  <pre><code># Only needed outside the devcontainer — already handled by postCreateCommand
+sudo apt-get install -y mingw-w64
+rustup target add x86_64-pc-windows-gnu</code></pre>
+
+  <p>Build the Windows release binary:</p>
+
+  <pre><code>cargo build --release --bin extract --target x86_64-pc-windows-gnu</code></pre>
+
+  <p>Your <code>.exe</code> is at:</p>
+
+  <pre><code>target/x86_64-pc-windows-gnu/release/extract.exe</code></pre>
+
+  <p>
+    Copy it to your Windows machine alongside your <code>kuka-docs\</code> and
+    <code>knowledge\</code> folders. It runs with no Rust or Cargo installation required.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Release vs debug builds</div>
+    <p>
+      The <code>--release</code> flag enables compiler optimisations — the binary is
+      smaller and faster. For a tool that processes large PDFs this matters. Debug builds
+      (without <code>--release</code>) compile faster but run slower. Always use
+      <code>--release</code> when building a binary you intend to distribute.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/rustc/targets/index.html" target="_blank">
+        <strong>Rust Platform Support — rustc docs</strong>
+      </a><br>
+      Lists every supported compilation target with its tier (level of official support).
+      <code>x86_64-pc-windows-gnu</code> is Tier 1 — fully supported and tested.
+      For complex CLIs with flags and subcommands, look at the
+      <a href="https://docs.rs/clap/latest/clap/" target="_blank"><code>clap</code></a>
+      crate — the standard Rust CLI argument parser.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "How would I add a --type flag to set the OKF type instead of hardcoding technical-note?",
+    "What is the difference between x86_64-pc-windows-gnu and x86_64-pc-windows-msvc?",
+    or "How do I cross-compile for Mac from Linux?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0019-drop-and-tempdir.html">← Lesson 19: Drop and TempDir</a>
+    <a href="0021-utf8-char-boundaries.html">Lesson 21: UTF-8 Char Boundaries →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "Why does the code use args().skip(1) rather than args().nth(1) to start reading arguments?",
+    options: [
+      "skip(1) is faster than nth(1) because it does not allocate a temporary string",
+      "nth(1) only works on Vecs; skip(1) works on any iterator including args()",
+      "skip(1) returns a new iterator positioned after the binary name, so subsequent .next() calls retrieve user arguments in order",
+      "nth(1) would return the second argument; skip(1) correctly returns the first user argument"
+    ],
+    correct: 2,
+    explanation: "nth(1) retrieves a single element and discards everything before it, consuming the iterator. skip(1) returns a new iterator with the first element removed, so you can call .next() repeatedly to retrieve user arguments one at a time. This is necessary when you need to read multiple arguments sequentially."
+  },
+  {
+    question: "What does match (args.next(), args.next()) { (Some(i), Some(o)) => ... } do?",
+    options: [
+      "It checks both arguments exist simultaneously and binds them in one step — any missing argument falls through to the _ arm",
+      "It reads both arguments in parallel to speed up startup on multi-core systems",
+      "It converts both Option values to Result so they can be propagated with ?",
+      "It is equivalent to calling unwrap() twice — it panics if either argument is missing"
+    ],
+    correct: 0,
+    explanation: "Matching on a tuple of Options checks both at once. The (Some(i), Some(o)) arm only matches when both arguments were supplied. Any other combination — (None, None), (Some, None), (None, Some) — falls through to the _ arm, which prints usage and exits. This is cleaner than two separate if-let checks."
+  },
+  {
+    question: "What is the x86_64-pc-windows-gnu target and why is it used instead of x86_64-pc-windows-msvc?",
+    options: [
+      "gnu produces smaller binaries; msvc produces faster ones — gnu is chosen for distribution size",
+      "gnu uses the open-source MinGW toolchain installable on Linux; msvc requires the Windows SDK which cannot be set up in a Linux container",
+      "gnu targets Windows 10 and later; msvc targets Windows 7 and later — gnu is chosen for compatibility",
+      "gnu is the default Rust Windows target; msvc requires a separate rustup component to unlock"
+    ],
+    correct: 1,
+    explanation: "x86_64-pc-windows-msvc links against Microsoft's Visual C++ runtime and requires the Windows SDK to build — this is impractical to install inside a Linux dev container. x86_64-pc-windows-gnu uses the MinGW open-source toolchain (sudo apt-get install mingw-w64) which works fine on Linux and produces a fully functional Windows executable."
+  },
+  {
+    question: "Why does the build command use --release when cross-compiling but not during development testing?",
+    options: [
+      "Cross-compilation requires --release because debug builds cannot target a different OS",
+      "Release builds are required when using the --target flag to avoid symbol conflicts with the host toolchain",
+      "Release builds enable optimisations producing a smaller, faster binary suitable for distribution — debug builds compile faster but run slower",
+      "Without --release the .exe extension is not added to the output filename on Windows targets"
+    ],
+    correct: 2,
+    explanation: "The --release flag enables compiler optimisations (inlining, dead code elimination, etc.) at the cost of longer compile times. During development you want fast compiles so you omit it. When distributing a binary — especially one that processes large PDFs — you want the optimised version. --release is independent of --target; you can use either or both."
+  }
+]);
+</script>
+</body>
+</html>

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 1: Splitting a Crate into a Library and Binaries</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 1</div>
+    <h1>Splitting a Crate into a Library and Binaries</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 1 — commit <code>17967a8</code></span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>Why we did this</h2>
+
+  <p>
+    Before this step, <code>src/main.rs</code> was ~740 lines holding four different
+    jobs: the MCP server wiring, the entire search engine, the frontmatter parser,
+    and every test. Meanwhile <code>src/extract.rs</code> — a completely separate
+    binary — contained its own private knowledge of the OKF frontmatter format.
+    Nothing stopped the two files from drifting apart, and nothing in the file
+    layout told a reader where "search" ended and "MCP protocol" began.
+  </p>
+
+  <p>
+    The fix is the standard Rust crate shape: a <strong>library</strong> holding all
+    the domain logic, and <strong>thin binaries</strong> that only wire that logic to
+    the outside world (stdio for the server, the command line for the extractor).
+  </p>
+
+  <div class="diagram">
+    Before:                          After:<br>
+    src/                             src/<br>
+    &nbsp;&nbsp;main.rs&nbsp;&nbsp;&nbsp; (740 lines, everything)&nbsp;&nbsp;&nbsp;&nbsp;lib.rs&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ← declares the modules<br>
+    &nbsp;&nbsp;extract.rs (own OKF format)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;frontmatter.rs ← OKF read + write (shared!)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bundle.rs&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ← knowledge dir + list_docs<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;search.rs&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ← the search engine + tests<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;main.rs&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ← MCP wiring only (~190 lines)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;bin/extract.rs ← CLI only, imports the lib
+  </div>
+
+  <h2>The Java equivalent: a multi-module Maven build</h2>
+
+  <p>
+    In Java you would reach for a multi-module project: a <code>core</code> module
+    with the shared logic, and two application modules depending on it.
+  </p>
+
+  <p><strong>Java (three pom.xml files, three source trees):</strong></p>
+  <pre><code>kuka-parent/
+  pom.xml                 &lt;modules&gt;core, server-app, extract-app&lt;/modules&gt;
+  core/
+    src/main/java/com/kuka/core/Search.java
+    src/main/java/com/kuka/core/Frontmatter.java
+  server-app/
+    pom.xml               &lt;dependency&gt;core&lt;/dependency&gt;
+    src/main/java/com/kuka/server/Main.java
+  extract-app/
+    pom.xml               &lt;dependency&gt;core&lt;/dependency&gt;
+    src/main/java/com/kuka/extract/Main.java</code></pre>
+
+  <p><strong>Rust (one Cargo.toml, one crate — Cargo's conventions do the wiring):</strong></p>
+  <pre><code>mcp-server/
+  Cargo.toml              no [[bin]] config needed at all
+  src/
+    lib.rs                ← the "core module": pub mod frontmatter; pub mod bundle; pub mod search;
+    frontmatter.rs
+    bundle.rs
+    search.rs
+    main.rs               ← auto-discovered binary "mcp-server" (named after the package)
+    bin/
+      extract.rs          ← auto-discovered binary "extract" (named after the file)</code></pre>
+
+  <p>
+    Where Maven needs explicit <code>&lt;dependency&gt;</code> declarations, a Cargo
+    binary in the same crate gets the library automatically. It imports the library
+    by the <em>crate name</em> — with dashes converted to underscores:
+  </p>
+
+  <pre><code>// src/bin/extract.rs — like `import com.kuka.core.Frontmatter;` in Java
+use mcp_server::frontmatter::OkfFrontmatter;
+
+// src/main.rs
+use mcp_server::bundle::{knowledge_dir, list_docs_in};
+use mcp_server::search::search_docs_in;</code></pre>
+
+  <h2>What changed in Cargo.toml</h2>
+
+  <p><strong>Before</strong> — every binary declared by hand:</p>
+  <pre><code>[[bin]]
+name = "mcp-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "extract"
+path = "src/extract.rs"</code></pre>
+
+  <p>
+    <strong>After</strong> — both blocks deleted. Cargo auto-discovers
+    <code>src/main.rs</code> as the default binary, <code>src/lib.rs</code> as the
+    library, and every file in <code>src/bin/</code> as a further binary. This is
+    the same "convention over configuration" philosophy Maven applies to
+    <code>src/main/java</code> — put files in the standard place and the build tool
+    needs no telling.
+  </p>
+
+  <p>
+    We also moved <code>tempfile</code> from <code>[dependencies]</code> to a new
+    <code>[dev-dependencies]</code> section. It is only used by tests, and
+    dev-dependencies are only compiled for <code>cargo test</code> — exactly
+    Maven's <code>&lt;scope&gt;test&lt;/scope&gt;</code>.
+  </p>
+
+  <h2>Modules and visibility: pub, pub(crate), private</h2>
+
+  <p>
+    <code>lib.rs</code> is the module root — the closest Java analogy is a
+    package-info plus the module's public API surface in one file:
+  </p>
+
+  <pre><code>pub mod bundle;       // like a public package the outside can use
+pub mod frontmatter;
+pub mod search;
+
+#[cfg(test)]                    // compiled ONLY for `cargo test`
+pub(crate) mod test_util { … }  // visible inside this crate, invisible outside</code></pre>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>public class Search</code></td>
+        <td><code>pub fn search_docs_in(…)</code></td>
+      </tr>
+      <tr>
+        <td>package-private (no modifier)</td>
+        <td>private (the default) — visible in the same module only</td>
+      </tr>
+      <tr>
+        <td>no direct equivalent (JPMS <code>exports</code> comes close)</td>
+        <td><code>pub(crate)</code> — public inside the crate, hidden outside</td>
+      </tr>
+      <tr>
+        <td>test fixtures in <code>src/test/java</code></td>
+        <td><code>#[cfg(test)] mod test_util</code> — stripped from release builds</td>
+      </tr>
+      <tr>
+        <td>Maven <code>&lt;scope&gt;test&lt;/scope&gt;</code></td>
+        <td><code>[dev-dependencies]</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    One visibility detail worth noticing: helper functions like
+    <code>fuzzy_word_match</code> and <code>repeated_lines</code> stayed
+    <em>private</em> in <code>search.rs</code>. Their tests still work because a
+    <code>#[cfg(test)] mod tests</code> block is a <em>child module</em> of the file
+    it lives in — and children can see their parent's private items. In Java terms:
+    the test class effectively lives inside the class under test, so nothing needs
+    to be made public just for testing.
+  </p>
+
+  <h2>Where every function went</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Function</th><th>Old home</th><th>New home</th></tr></thead>
+    <tbody>
+      <tr><td><code>extract_frontmatter_field</code></td><td>main.rs</td><td>frontmatter.rs (<code>pub</code>)</td></tr>
+      <tr><td>OKF writing (was a <code>format!</code> in extract.rs)</td><td>extract.rs</td><td>frontmatter.rs — see <a href="refactor-02-shared-frontmatter-module.html">Refactor Appendix 2</a></td></tr>
+      <tr><td><code>knowledge_dir</code>, <code>list_docs_in</code></td><td>main.rs</td><td>bundle.rs (<code>pub</code>)</td></tr>
+      <tr><td><code>search_docs_in</code> + all helpers</td><td>main.rs</td><td>search.rs (helpers private)</td></tr>
+      <tr><td><code>setup_test_bundle</code></td><td>main.rs tests</td><td>lib.rs <code>test_util</code> (<code>pub(crate)</code>)</td></tr>
+      <tr><td>KukaServer, tools, resources, <code>main()</code></td><td>main.rs</td><td>main.rs (unchanged — now that's ALL it holds)</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    Behavior is identical: all 15 baseline tests moved with their functions and still
+    pass, plus one new round-trip test (next lesson) — 16 total.
+  </p>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "Why does Rust use one crate with a lib + bins instead of separate crates?",
+    "What exactly does pub(crate) protect against?",
+    or "When would I use a Cargo workspace instead of src/bin/?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="appendix-05-flatmap.html">← Appendix 5: flatMap</a>
+    <a href="refactor-02-shared-frontmatter-module.html">Refactor Appendix 2: One Frontmatter Module →</a>
+  </nav>
+
+</div>
+</body>
+</html>

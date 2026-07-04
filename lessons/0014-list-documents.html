@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 14: List Documents Tool</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 14</div>
+    <h1>List Documents Tool</h1>
+    <div class="lesson-meta">
+      <span>~20 minutes</span>
+      <span>Hands-on — edit, build, test in your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're building</h2>
+
+  <p>
+    Right now the server has one tool: <code>search_docs</code>. An AI client has no way to
+    know what's in the knowledge bundle without searching for something specific. This lesson
+    adds a second tool — <code>list_docs</code> — that returns every document in the bundle,
+    grouped by type:
+  </p>
+
+  <div class="diagram">
+    Knowledge bundle — 4 document(s):<br><br>
+    safety:<br>
+    &nbsp;&nbsp;• AMR Safe Minimum Distances<br><br>
+    technical-note:<br>
+    &nbsp;&nbsp;• FocusCenter UI Reference<br>
+    &nbsp;&nbsp;• Reflector Deployment Guide<br>
+    &nbsp;&nbsp;• KUKA Technical Note — Reflector Deployment v1.0.1
+  </div>
+
+  <p>
+    This also introduces <strong>HashMap</strong> — Rust's equivalent of Java's
+    <code>HashMap&lt;K, V&gt;</code> — and the idiomatic pattern for grouping values under
+    a key.
+  </p>
+
+  <h2>New concept: HashMap and the group-by pattern</h2>
+
+  <p>
+    You already know <code>HashSet</code> from <a href="0012-stop-words.html">Lesson 12</a>.
+    <code>HashMap</code> is its companion: instead of storing unique values it stores
+    key-value pairs, with O(1) lookup by key.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Map&lt;String, List&lt;String&gt;&gt; grouped = new HashMap&lt;&gt;();</code></td>
+        <td><code>let mut grouped: HashMap&lt;String, Vec&lt;String&gt;&gt; = HashMap::new();</code></td>
+      </tr>
+      <tr>
+        <td><code>grouped.get("safety")</code> → <code>List&lt;String&gt;</code> or null</td>
+        <td><code>grouped.get("safety")</code> → <code>Option&lt;&amp;Vec&lt;String&gt;&gt;</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The most common operation on a <code>HashMap&lt;String, Vec&lt;String&gt;&gt;</code> is
+    "add this value to the list under this key, creating the list if the key doesn't exist
+    yet." In Java you'd write this as:
+  </p>
+
+  <pre><code>// Java
+grouped.computeIfAbsent(docType, k -> new ArrayList&lt;&gt;()).add(title);</code></pre>
+
+  <p>Rust has a direct equivalent via the
+    <a href="https://doc.rust-lang.org/std/collections/hash_map/enum.Entry.html" target="_blank"><code>.entry()</code></a>
+    API:
+  </p>
+
+  <pre><code>// Rust
+grouped.entry(doc_type).or_insert_with(Vec::new).push(title);</code></pre>
+
+  <p>Reading left to right:</p>
+  <ol>
+    <li><code>.entry(doc_type)</code> — look up (or prepare to insert) this key</li>
+    <li><code>.or_insert_with(Vec::new)</code> — if the key is absent, insert a new empty Vec; either way, return a mutable reference to the Vec</li>
+    <li><code>.push(title)</code> — append the title to that Vec</li>
+  </ol>
+
+  <p>
+    One line, no null check, no separate get-then-put. This is the idiomatic Rust group-by
+    pattern and you will see it constantly.
+  </p>
+
+  <h2>Step 1 — Add HashMap to the use declaration</h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code>. Update the collections import to include
+    <code>HashMap</code>:
+  </p>
+
+  <p><strong>Before:</strong></p>
+  <pre><code>use std::collections::HashSet;</code></pre>
+
+  <p><strong>After:</strong></p>
+  <pre><code>use std::collections::{HashMap, HashSet};</code></pre>
+
+  <p>
+    The curly-brace syntax imports multiple items from the same module in one line — the
+    same as Java's <code>import java.util.{HashMap, HashSet}</code> if Java supported that
+    syntax (it doesn't; Java requires one import per line).
+  </p>
+
+  <h2>Step 2 — Add the list_docs tool</h2>
+
+  <p>
+    Inside the <code>#[tool_router] impl KukaServer</code> block, add this method after
+    <code>ping</code> and before <code>search_docs</code>:
+  </p>
+
+  <pre><code>#[tool(description = "List all documents in the KUKA knowledge bundle, grouped by type")]
+fn list_docs(&amp;self) -> Result&lt;CallToolResult, McpError&gt; {
+    let knowledge_dir = std::path::Path::new("knowledge");
+    let mut grouped: HashMap&lt;String, Vec&lt;String&gt;&gt; = HashMap::new();
+    let mut total: usize = 0;
+
+    if let Ok(entries) = std::fs::read_dir(knowledge_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&amp;path) {
+                let title = extract_frontmatter_field(&amp;content, "title")
+                    .unwrap_or_else(|| path.file_stem().unwrap().to_string_lossy().to_string());
+                let doc_type = extract_frontmatter_field(&amp;content, "type")
+                    .unwrap_or_else(|| "uncategorised".to_string());
+                grouped.entry(doc_type).or_insert_with(Vec::new).push(title);
+                total += 1;
+            }
+        }
+    }
+
+    if grouped.is_empty() {
+        return Ok(CallToolResult::success(vec![Content::text(
+            "No documents found in the knowledge bundle.".to_string(),
+        )]));
+    }
+
+    let mut type_keys: Vec&lt;String&gt; = grouped.keys().cloned().collect();
+    type_keys.sort();
+
+    let sections: Vec&lt;String&gt; = type_keys.into_iter().map(|doc_type| {
+        let mut titles = grouped.remove(&amp;doc_type).unwrap_or_default();
+        titles.sort();
+        let items: Vec&lt;String&gt; = titles.into_iter().map(|t| format!("  • {t}")).collect();
+        format!("{doc_type}:\n{}", items.join("\n"))
+    }).collect();
+
+    Ok(CallToolResult::success(vec![Content::text(format!(
+        "Knowledge bundle — {total} document(s):\n\n{}",
+        sections.join("\n\n")
+    ))]))
+}</code></pre>
+
+  <h3>Reading the new code</h3>
+
+  <ul>
+    <li>
+      <code>grouped.entry(doc_type).or_insert_with(Vec::new).push(title)</code> — the
+      group-by pattern described above. <code>doc_type</code> is a <code>String</code>,
+      so <code>.entry()</code> takes ownership of it (no <code>&amp;</code>). The key is
+      either used as the new map key or dropped if the key already existed. See
+      <a href="appendix-04-ownership-vs-reference.html">Appendix 4: Ownership vs Reference</a>
+      for the general rule on when to pass owned values vs references.
+    </li>
+    <li>
+      <code>grouped.keys().cloned().collect()</code> — <code>.keys()</code> yields
+      references (<code>&amp;String</code>). <code>.cloned()</code> converts each
+      <code>&amp;String</code> into an owned <code>String</code> by cloning it. Without
+      this step, the Vec would borrow from <code>grouped</code>, which would then prevent
+      you from calling <code>grouped.remove()</code> later.
+    </li>
+    <li>
+      <code>grouped.remove(&amp;doc_type)</code> — removes the key from the map and
+      returns the value wrapped in <code>Some(Vec&lt;String&gt;)</code>. This avoids
+      cloning the Vec — instead of copying the list out, we move it. <code>.unwrap_or_default()</code>
+      handles the <code>None</code> case (which cannot actually happen here, but the
+      type system doesn't know that).
+    </li>
+    <li>
+      <code>titles.sort()</code> — sorts the title strings alphabetically in place.
+      <code>String</code> implements <code>Ord</code>, so the default sort is
+      lexicographic — same as Java's <code>Collections.sort(list)</code>.
+    </li>
+  </ul>
+
+  <div class="callout">
+    <div class="callout-label">Why remove() instead of get()?</div>
+    <p>
+      <code>grouped.get(&amp;doc_type)</code> would return <code>Option&lt;&amp;Vec&lt;String&gt;&gt;</code>
+      — a reference. A reference cannot be sorted in place or moved into the closure's
+      return value. <code>grouped.remove()</code> returns <code>Option&lt;Vec&lt;String&gt;&gt;</code>
+      — the owned Vec — which can be sorted and consumed freely. Since we only visit each
+      key once, removing it is safe.
+    </p>
+  </div>
+
+  <h2>Step 3 — Build and test</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    Restart the MCP server and ask your AI client to list what's available:
+  </p>
+
+  <pre><code>What documents do you have access to?</code></pre>
+
+  <p>
+    You should see every <code>.md</code> file in <code>knowledge/</code> grouped by its
+    frontmatter <code>type</code> field. If a document is missing a <code>type</code> field
+    it will appear under <code>uncategorised</code>.
+  </p>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/std/collections/struct.HashMap.html" target="_blank">
+        <strong>HashMap — Rust standard library docs</strong>
+      </a><br>
+      Full API reference for <code>HashMap</code>. Pay particular attention to the
+      <a href="https://doc.rust-lang.org/std/collections/hash_map/enum.Entry.html" target="_blank">Entry API</a>
+      section — <code>.entry()</code>, <code>.or_insert()</code>, <code>.or_insert_with()</code>,
+      and <code>.or_default()</code> are the four most common entry methods and each suits
+      slightly different situations.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "What is the difference between or_insert() and or_insert_with()?",
+    "Why does .entry() take ownership of the key instead of a reference?",
+    or "How would I count occurrences instead of collecting into a Vec — e.g. how many docs per type?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0013-result-ranking.html">← Lesson 13: Result Ranking</a>
+    <a href="0015-multiple-excerpts.html">Lesson 15: Multiple Excerpts →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What does .entry(key).or_insert_with(Vec::new) return when the key already exists?",
+    options: [
+      "None — the key was already present so nothing is inserted",
+      "A mutable reference to the existing Vec for that key",
+      "A new empty Vec, replacing the existing one",
+      "true — confirming the key was found without inserting"
+    ],
+    correct: 1,
+    explanation: "or_insert_with() only calls Vec::new if the key is absent. If the key already exists it skips the closure entirely and returns a mutable reference to the existing value. Either way the return value is &mut Vec<String>, ready to call .push() on."
+  },
+  {
+    question: "What is the Java equivalent of grouped.entry(docType).or_insert_with(Vec::new).push(title)?",
+    options: [
+      "grouped.put(docType, List.of(title))",
+      "grouped.getOrDefault(docType, new ArrayList<>()).add(title)",
+      "grouped.computeIfAbsent(docType, k -> new ArrayList<>()).add(title)",
+      "grouped.merge(docType, List.of(title), List::addAll)"
+    ],
+    correct: 2,
+    explanation: "computeIfAbsent() inserts a new list if the key is absent and returns the list — existing or new — for you to add to. getOrDefault() is a common mistake: it returns a copy of the default rather than inserting it, so the add() call is lost."
+  },
+  {
+    question: "Why does the code call .cloned() in grouped.keys().cloned().collect()?",
+    options: [
+      "cloned() is required before any iterator can be collected into a Vec",
+      "keys() returns an unordered iterator that cloned() sorts before collecting",
+      "keys() yields &String references; cloned() produces owned Strings for the Vec",
+      "Without cloned() the collect() call would return a HashSet instead of a Vec"
+    ],
+    correct: 2,
+    explanation: "HashMap::keys() yields &String — borrowed references into the map. To put them in a Vec<String> you need owned Strings. .cloned() calls .clone() on each reference, producing owned values that can be stored and later sorted independently of the map."
+  },
+  {
+    question: "What does grouped.remove(&doc_type) return when doc_type is present in the map?",
+    options: [
+      "Some(Vec<String>) — the owned Vec for that key, removed from the map",
+      "true — a boolean confirming the key was removed successfully",
+      "A mutable reference to the Vec, which you can then sort in place",
+      "&Vec<String> — a borrowed reference to the value before removal"
+    ],
+    correct: 0,
+    explanation: "HashMap::remove() returns Option<V> — Some(value) if the key existed, None if it didn't. The value is moved out of the map and owned by the caller. This is why remove() is preferable to get() here: get() returns a reference you cannot sort or consume."
+  }
+]);
+</script>
+</body>
+</html>

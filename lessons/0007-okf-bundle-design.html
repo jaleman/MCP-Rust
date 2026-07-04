@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 7: OKF Bundle Design</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 7</div>
+    <h1>OKF Bundle Design</h1>
+    <div class="lesson-meta">
+      <span>~25 minutes</span>
+      <span>Design + hands-on file authoring</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're building</h2>
+
+  <p>
+    The <code>search_docs</code> tool currently returns a stub. Before writing
+    the Rust code to make it real, you need to decide what it will search
+    <em>over</em>. This lesson designs the knowledge bundle — the directory of
+    structured markdown files your server will query. By the end you will have
+    a <code>knowledge/</code> directory with three hand-authored OKF files that
+    prove the schema works before any automation is built.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Why hand-author first?</div>
+    <p>
+      Writing a few files manually before building the extractor forces you to
+      decide what good knowledge looks like. A bad schema discovered after
+      extracting 500 pages is expensive to fix. Three files now is cheap.
+    </p>
+  </div>
+
+  <h2>The OKF format</h2>
+
+  <p>
+    An OKF bundle is a directory of markdown files. Each file is one
+    <em>concept</em> — a unit of knowledge about one thing. Every file has a
+    small YAML frontmatter block followed by a markdown body.
+    <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md" target="_blank">[OKF v0.1 Spec]</a>
+  </p>
+
+  <h3>Required field</h3>
+
+  <p>Only one field is required in every concept:</p>
+
+  <pre><code>type: technical-note</code></pre>
+
+  <p>
+    <code>type</code> is a free string you define for your domain. Consumers
+    must accept unknown types gracefully — so you can add new types at any time
+    without breaking anything.
+  </p>
+
+  <h3>Recommended fields</h3>
+
+  <table style="width:100%; border-collapse:collapse; font-size:0.9rem; margin:1.5rem 0;">
+    <thead>
+      <tr style="border-bottom:2px solid var(--border)">
+        <th style="text-align:left; padding:0.5rem 1rem 0.5rem 0">Field</th>
+        <th style="text-align:left; padding:0.5rem 1rem 0.5rem 0">Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>title</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">Human-readable name — used in search results</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>description</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">One-sentence summary — shown in previews</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>resource</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">URI or path to the source document — enables citations</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>tags</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">YAML list for filtering and grouping</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>timestamp</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">ISO 8601 date of last change</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>The body</h3>
+
+  <p>
+    Plain markdown. The OKF spec recommends <strong>structured elements over
+    prose</strong> — headings, bullet lists, tables, code blocks. Structured
+    content is easier for both humans and AI agents to parse than paragraphs of
+    flowing text.
+  </p>
+
+  <h2>The KUKA type vocabulary</h2>
+
+  <p>
+    Based on the document library, these are the types for this bundle:
+  </p>
+
+  <table style="width:100%; border-collapse:collapse; font-size:0.9rem; margin:1.5rem 0;">
+    <thead>
+      <tr style="border-bottom:2px solid var(--border)">
+        <th style="text-align:left; padding:0.5rem 1rem 0.5rem 0">Type</th>
+        <th style="text-align:left; padding:0.5rem 1rem 0.5rem 0">Documents</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>operating-manual</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">BA_KMF_1500P-CB, BA_KMP_1500P, BA_KMP_3000P</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>fleet-manual</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">KUKA_AMR_Fleet_2.14, KUKA_AMR_Fleet_2.15</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>technical-note</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">All KUKA Technical Note PDFs (MQTT, reflectors, ports, etc.)</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>safety</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">Safe Minimum Distances, Emergency Fire Alarm</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>work-instruction</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">KMP Calibration WI</td>
+      </tr>
+      <tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>reference</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">MQTT Payload Definitions, Fleet Ports, Reflective Sticker Specs, FocusCenter screenshot</td>
+      </tr>
+      <tr>
+        <td style="padding:0.5rem 1rem 0.5rem 0"><code>site-document</code></td>
+        <td style="padding:0.5rem 1rem 0.5rem 0">Building map DOCX</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>The resource field convention</h2>
+
+  <p>
+    For PDF sources, use a relative path from the project root plus an optional
+    page anchor:
+  </p>
+
+  <pre><code>resource: kuka-docs/KUKA Technical Note -Reflector Deployment- V1.0.1.pdf#page=4</code></pre>
+
+  <p>
+    When your server returns a result, the <code>resource</code> field gives
+    Claude the exact citation — which document, which page. This is what makes
+    the answers trustworthy.
+  </p>
+
+  <h2>Step 1 — Create the knowledge directory</h2>
+
+  <p>
+    Inside your dev container terminal, create the bundle directory at the
+    project root:
+  </p>
+
+  <pre><code>mkdir -p /workspaces/MCP-Rust/knowledge</code></pre>
+
+  <h2>Step 2 — Write three hand-authored concepts</h2>
+
+  <p>
+    Create each file below in <code>/workspaces/MCP-Rust/knowledge/</code>.
+    These are real entries drawn from your actual document library.
+  </p>
+
+  <h3>File 1: <code>reflector-deployment.md</code></h3>
+
+  <pre><code>---
+type: technical-note
+title: Reflector Deployment Guide
+description: Placement rules and minimum quantities for retroreflectors used in KUKA AMR laser navigation.
+resource: kuka-docs/KUKA Technical Note -Reflector Deployment- V1.0.1.pdf
+tags: [navigation, reflectors, installation, amr]
+timestamp: 2026-06-26T00:00:00Z
+---
+
+# Overview
+
+Retroreflectors provide fixed landmarks that KUKA AMR robots use for laser-based localisation. Correct placement is critical — too few or poorly positioned reflectors cause navigation failures.
+
+# Key Requirements
+
+- Minimum reflector height from floor: 150 mm
+- Reflectors must be visible from robot scan height at all times
+- Minimum of 3 reflectors visible from any robot position
+
+# Installation Notes
+
+- Mount on rigid surfaces only — vibrating surfaces cause false detections
+- Avoid placement near glass or highly reflective backgrounds
+- Document reflector positions in the building map after installation</code></pre>
+
+  <h3>File 2: <code>safe-minimum-distances.md</code></h3>
+
+  <pre><code>---
+type: safety
+title: AMR Safe Minimum Distances
+description: Required safety distances between KUKA AMR robots and people, obstacles, and other machines.
+resource: kuka-docs/KUKA.AMR - Safe Minimum Distances v1.1.pdf
+tags: [safety, amr, distances, compliance, risk-assessment]
+timestamp: 2026-06-26T00:00:00Z
+---
+
+# Overview
+
+KUKA AMR robots must maintain defined minimum distances to ensure safe operation around people and infrastructure. These values feed into the site risk assessment.
+
+# Distance Categories
+
+- **Protective stop distance**: distance at which the robot performs a protective stop
+- **Warning zone distance**: distance at which the robot slows and emits a warning
+- **Collaboration zone**: area where simultaneous human-robot work is permitted under defined conditions
+
+# Important
+
+Always refer to the source document for exact values — distances vary by robot model, speed setting, and payload.</code></pre>
+
+  <h3>File 3: <code>focuscenter-ui.md</code></h3>
+
+  <pre><code>---
+type: reference
+title: FocusCenter Fleet Management UI
+description: Reference for the KUKA FocusCenter fleet management dashboard, showing robot status, job queue, and map view.
+resource: kuka-docs/FocusCenter.png
+tags: [focuscenter, fleet-management, ui, dashboard, software]
+timestamp: 2026-06-26T00:00:00Z
+---
+
+# Overview
+
+FocusCenter is KUKA's browser-based fleet management software for coordinating multiple AMR robots across a facility.
+
+# Main Dashboard Elements
+
+- **Map view**: real-time robot positions overlaid on the facility map
+- **Job queue**: pending, active, and completed transport orders
+- **Robot status panel**: battery level, current task, error state per robot
+- **Alert feed**: system warnings and robot fault notifications
+
+# Notes
+
+The source file is a screenshot of the FocusCenter interface. For interactive documentation, refer to the KUKA AMR Fleet manuals.</code></pre>
+
+  <h2>Step 3 — Verify the bundle looks right</h2>
+
+  <p>List the files you just created:</p>
+
+  <pre><code>ls /workspaces/MCP-Rust/knowledge/</code></pre>
+
+  <p>
+    You should see three <code>.md</code> files. Open one and check that the
+    YAML frontmatter parses correctly — the dashes (<code>---</code>) must be
+    on their own lines with no leading spaces.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">What comes next</div>
+    <p>
+      Lesson 8 will add a PDF extraction pipeline that populates
+      <code>knowledge/</code> automatically from the KUKA docs library.
+      Lesson 9 will update <code>search_docs</code> to search the bundle and
+      return real results. These three hand-authored files give you a working
+      target to test against before the extractor exists.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md" target="_blank">
+        <strong>OKF v0.1 Specification — GoogleCloudPlatform/knowledge-catalog</strong>
+      </a><br>
+      The one-page spec. Read the conformance criteria and cross-linking rules
+      — both will matter when the extractor produces hundreds of files that
+      reference each other.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "How should I split a large PDF manual into multiple OKF concepts?",
+    "Should each page be its own file or should I group by section?",
+    or "How do I handle a document that covers multiple types?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0006-connect-to-claude-desktop.html">← Lesson 6: Connecting to an AI Client</a>
+    <a href="0008-pdf-extraction.html">Lesson 8: PDF Extraction →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What is the only required field in every OKF concept file?",
+    options: [
+      "type — a free string identifying the kind of concept",
+      "title — the human-readable name of the concept",
+      "resource — the URI pointing to the source document",
+      "description — a one-sentence summary for search previews"
+    ],
+    correct: 0,
+    explanation: "Only 'type' is required. All other fields — title, description, resource, tags, timestamp — are recommended but optional. Consumers must accept unknown types gracefully."
+  },
+  {
+    question: "Why does the OKF spec recommend structured markdown over prose in the body?",
+    options: [
+      "Headings, lists, and tables are easier for both humans and AI agents to parse",
+      "Prose paragraphs exceed the maximum body length allowed by OKF v0.1",
+      "The YAML frontmatter parser fails if the body contains sentences",
+      "Structured markdown compresses better when the bundle is archived"
+    ],
+    correct: 0,
+    explanation: "The spec explicitly recommends structural elements over prose because they aid both human reading and agent parsing — an AI searching the bundle can extract facts from a table far more reliably than from a paragraph."
+  },
+  {
+    question: "What does the resource field provide that makes search results trustworthy?",
+    options: [
+      "A citation linking the answer back to the exact source document and page",
+      "A checksum that verifies the concept file has not been modified",
+      "A URL that the search_docs tool fetches live when the tool is called",
+      "A foreign key that links two concept files within the same bundle"
+    ],
+    correct: 0,
+    explanation: "The resource field gives Claude the citation — which PDF, which page. Without it, an answer is just text with no traceable origin. With it, the user can verify the claim against the official KUKA documentation."
+  },
+  {
+    question: "Why write three files by hand before building the PDF extractor?",
+    options: [
+      "To validate the schema cheaply before committing to it at scale",
+      "OKF requires at least three seed files before a bundle is considered valid",
+      "The PDF extractor reads the hand-authored files to learn the correct format",
+      "Hand-authored files are the only ones the search_docs tool can index"
+    ],
+    correct: 0,
+    explanation: "Three files costs minutes to write and reveals schema problems immediately. Discovering a bad schema after extracting 500 pages is expensive. Hand-authoring first is a cheap validation step."
+  }
+]);
+</script>
+</body>
+</html>

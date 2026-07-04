@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 12: Stop Word Filtering</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 12</div>
+    <h1>Stop Word Filtering</h1>
+    <div class="lesson-meta">
+      <span>~15 minutes</span>
+      <span>Hands-on — edit, build, test in your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're fixing</h2>
+
+  <p>
+    After <a href="0011-fuzzy-search.html">Lesson 11</a>, every word in the query must match
+    somewhere in the document — including words like "what", "are", "the", and "for". These
+    words are called <strong>stop words</strong>: they carry no meaning on their own and appear
+    in almost every document. Requiring them to match adds noise and occasionally causes a
+    query to fail.
+  </p>
+
+  <p>
+    More importantly, if a stop word is 3 characters or fewer — "are", "the", "for", "of" —
+    the fuzzy helper skips it (too short to fuzz) and requires an exact substring match.
+    "The" and "are" will appear in any document, so this rarely breaks things, but
+    it wastes time checking words that contribute nothing to the result.
+  </p>
+
+  <p>
+    The fix: strip stop words from the query before searching, so only meaningful terms reach
+    <code>fuzzy_word_match</code>.
+  </p>
+
+  <div class="diagram">
+    Query: "what are the safe minimum distances for AMR robots"<br><br>
+    Before: terms = ["what", "are", "the", "safe", "minimum", "distances", "for", "amr", "robots"]<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;all 9 words must match in the document<br><br>
+    After:&nbsp; terms = ["safe", "minimum", "distances", "amr", "robots"]<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;only 5 meaningful words must match
+  </div>
+
+  <h2>New concepts — translated from Java</h2>
+
+  <h3>Concept 1: HashSet — a set with O(1) lookup</h3>
+
+  <p>
+    A <code>HashSet</code> stores unique values and answers "is this value in the set?" in
+    constant time — it does not scan through the list, it hashes the value and jumps directly
+    to the answer. In Java you already know this as <code>HashSet&lt;String&gt;</code>.
+    Rust's version works identically.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Set&lt;String&gt; stops = Set.of("a", "the", "for");</code></td>
+        <td><code>let stops: HashSet&lt;&amp;str&gt; = HashSet::from(["a", "the", "for"]);</code></td>
+      </tr>
+      <tr>
+        <td><code>stops.contains("the")</code></td>
+        <td><code>stops.contains("the")</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    To use it you need a <code>use</code> declaration — <code>HashSet</code> lives in Rust's
+    standard library under <code>std::collections</code>, the same module that holds
+    <code>HashMap</code>, <code>BTreeMap</code>, and other collection types:
+  </p>
+
+  <pre><code>use std::collections::HashSet;</code></pre>
+
+  <p>
+    <code>HashSet::from([...])</code> creates a set from an array literal. The square brackets
+    are a fixed-size array (not a <code>Vec</code>), but <code>from()</code> converts it for
+    you. This pattern is the closest Rust equivalent to Java's <code>Set.of(...)</code>.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Why not a Vec?</div>
+    <p>
+      You could store stop words in a <code>Vec&lt;&amp;str&gt;</code> and call
+      <code>vec.contains(&amp;word)</code> — it would work. But <code>Vec::contains()</code>
+      scans every element from the start, so it is O(n). With 30 stop words that is 30
+      comparisons in the worst case. <code>HashSet::contains()</code> is O(1) — one hash
+      lookup regardless of how many words are in the set. For a fixed list of known words,
+      <code>HashSet</code> is the right tool.
+    </p>
+  </div>
+
+  <h3>Concept 2: .filter() — keep only elements that pass a test</h3>
+
+  <p>
+    <code>.filter()</code> is a method on any iterator that passes each element through a
+    predicate (a closure returning <code>bool</code>) and keeps only the elements where the
+    predicate returns <code>true</code>. In Java you know this as
+    <code>Stream.filter(predicate)</code>.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Arrays.stream(words)<br>&nbsp;&nbsp;.filter(w -&gt; !stops.contains(w))<br>&nbsp;&nbsp;.collect(toList())</code></td>
+        <td><code>words.split_whitespace()<br>&nbsp;&nbsp;.filter(|w| !stops.contains(w))<br>&nbsp;&nbsp;.collect()</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    Like <code>.all()</code> and <code>.any()</code>, <code>.filter()</code> is lazy — it
+    does not run until something consumes the iterator. The <code>.collect()</code> at the
+    end is what triggers the work and builds the <code>Vec</code>.
+  </p>
+
+  <h2>Step 1 — Add the use declaration</h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code>. Add this line at the top with the other
+    <code>use</code> declarations:
+  </p>
+
+  <pre><code>use std::collections::HashSet;</code></pre>
+
+  <h2>Step 2 — Replace the terms line in search_docs</h2>
+
+  <p>
+    Find this block near the top of <code>search_docs</code>:
+  </p>
+
+  <pre><code>let query = input.query.to_lowercase();
+let terms: Vec&lt;&amp;str&gt; = query.split_whitespace().collect();</code></pre>
+
+  <p>Replace it with:</p>
+
+  <pre><code>let query = input.query.to_lowercase();
+let stop_words: HashSet&lt;&amp;str&gt; = HashSet::from([
+    "a", "an", "the", "is", "are", "was", "were", "be", "been",
+    "have", "has", "had", "do", "does", "did", "will", "would",
+    "can", "could", "should", "may", "might", "shall",
+    "i", "you", "he", "she", "it", "we", "they",
+    "what", "which", "who", "when", "where", "why", "how",
+    "in", "on", "at", "to", "for", "of", "with", "by", "from",
+    "and", "or", "but", "not", "no", "nor",
+]);
+let terms: Vec&lt;&amp;str&gt; = query
+    .split_whitespace()
+    .filter(|word| !stop_words.contains(word))
+    .collect();
+if terms.is_empty() {
+    return Ok(CallToolResult::success(vec![Content::text(
+        "Query contains only common words. Please add specific search terms.".to_string(),
+    )]));
+}</code></pre>
+
+  <h3>What each part does</h3>
+
+  <ul>
+    <li>
+      <code>HashSet::from([...])</code> — builds the stop word set from an array literal.
+      The type annotation <code>HashSet&lt;&amp;str&gt;</code> tells Rust what type of values
+      to store. Without it, Rust could not infer the type from the array alone.
+    </li>
+    <li>
+      <code>.filter(|word| !stop_words.contains(word))</code> — keeps only words that are
+      <em>not</em> in the stop word set. The <code>!</code> is logical negation — same as Java.
+    </li>
+    <li>
+      <code>if terms.is_empty()</code> — guards against queries like "what is the" where
+      every word is a stop word. Without this guard, <code>terms.iter().all(...)</code> would
+      return <code>true</code> for every document (vacuous truth: all zero terms match), and
+      the server would return every document as a result.
+    </li>
+    <li>
+      <code>return Ok(...)</code> — an early return from the function. Note the explicit
+      <code>return</code> keyword here; without it, this would need to be the last expression
+      in the function to be treated as the return value.
+    </li>
+  </ul>
+
+  <div class="callout">
+    <div class="callout-label">Vacuous truth — why the empty guard matters</div>
+    <p>
+      <code>terms.iter().all(|term| ...)</code> with zero terms returns <code>true</code>
+      automatically. Logically: "all zero terms match" is vacuously true, the same way
+      "all students in an empty classroom passed the exam" is technically true. Without the
+      guard, an all-stop-word query would match every document — the opposite of useful.
+    </p>
+  </div>
+
+  <h2>Step 3 — Build and test</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    Then try a query heavy with stop words:
+  </p>
+
+  <pre><code>What are the safe distances for AMR robots?</code></pre>
+
+  <p>
+    Before this lesson, 9 words were sent to the matcher. After, only "safe", "distances",
+    and "amr" (or "robots") reach <code>fuzzy_word_match</code> — all of which appear in
+    the safety document.
+  </p>
+
+  <p>
+    Also verify the empty-query guard works. Ask your AI client something like:
+  </p>
+
+  <pre><code>What is it?</code></pre>
+
+  <p>
+    You should get the "Query contains only common words" response instead of every document
+    being returned.
+  </p>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/std/collections/index.html" target="_blank">
+        <strong>std::collections — Rust standard library docs</strong>
+      </a><br>
+      The module that contains <code>HashSet</code>, <code>HashMap</code>,
+      <code>BTreeMap</code>, and all other standard collection types. The page includes a
+      guide on choosing the right collection for your use case — worth a read once you are
+      comfortable with the basics.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "When would I use BTreeSet instead of HashSet?",
+    "How do I add words to the stop list at runtime instead of hardcoding them?",
+    or "What is the difference between iter().filter() and retain() on a Vec?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0011-fuzzy-search.html">← Lesson 11: Fuzzy Search</a>
+    <a href="0013-result-ranking.html">Lesson 13: Result Ranking →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "The stop word list has 30 entries. How many comparisons does HashSet::contains() make to check if a word is in the list?",
+    options: [
+      "30 — it scans every entry to be certain",
+      "15 — it uses binary search, halving the list each step",
+      "1 — it hashes the word and jumps directly to the answer",
+      "It depends on where in the list the word appears"
+    ],
+    correct: 2,
+    explanation: "HashSet uses a hash function to compute a position directly, giving O(1) lookup regardless of the set size. A Vec would require scanning up to 30 entries in the worst case — O(n)."
+  },
+  {
+    question: "What does .filter(|word| !stop_words.contains(word)) do to a word that IS in the stop list?",
+    options: [
+      "It replaces the word with an empty string placeholder",
+      "It excludes the word — it is dropped from the resulting Vec",
+      "It keeps the word but marks it as low priority for matching",
+      "It panics — filter() cannot handle HashSet lookups inside closures"
+    ],
+    correct: 1,
+    explanation: "filter() keeps elements where the predicate returns true and discards the rest. !stop_words.contains(word) returns false for stop words, so they are excluded from the collected Vec."
+  },
+  {
+    question: "Why does the code check if terms.is_empty() after filtering?",
+    options: [
+      "Because split_whitespace() returns an empty iterator for single-word queries",
+      "Because collect() returns None instead of a Vec when no elements pass the filter",
+      "Because fuzzy_word_match panics when called with an empty terms list",
+      "Because all() returns true for zero elements, which would match every document"
+    ],
+    correct: 3,
+    explanation: "all() over an empty iterator is vacuously true — every document would appear to match all zero terms. The guard catches this case and returns a helpful message instead of dumping every document."
+  },
+  {
+    question: "What is the Rust equivalent of Java's Set.of(\"a\", \"the\", \"for\")?",
+    options: [
+      "HashSet::from([\"a\", \"the\", \"for\"])",
+      "Vec::new().extend([\"a\", \"the\", \"for\"])",
+      "HashSet::new().insert(\"a\").insert(\"the\").insert(\"for\")",
+      "set![\"a\", \"the\", \"for\"]"
+    ],
+    correct: 0,
+    explanation: "HashSet::from([...]) creates a HashSet from a fixed-size array literal. It is the idiomatic way to initialise a HashSet with known values at compile time — the closest equivalent to Java's Set.of()."
+  }
+]);
+</script>
+</body>
+</html>

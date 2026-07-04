@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 8: PDF Extraction</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 8</div>
+    <h1>PDF Extraction</h1>
+    <div class="lesson-meta">
+      <span>~25 minutes</span>
+      <span>Hands-on — run inside your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're building</h2>
+
+  <p>
+    A second Rust binary — <code>extract</code> — that reads a KUKA PDF and
+    writes an OKF markdown file into <code>knowledge/</code>. By the end you
+    will have proved the full extraction pipeline: PDF on disk → Rust code →
+    OKF file ready for search.
+  </p>
+
+  <p>
+    This lesson uses one PDF to keep scope tight. Lesson 9 will extend it to
+    batch-process the whole library.
+  </p>
+
+  <h2>New concept: multiple binaries</h2>
+
+  <p>
+    So far your Cargo project has one binary: <code>mcp-server</code>, compiled
+    from <code>src/main.rs</code>. Cargo supports multiple binaries in the same
+    project — each one is a separate <code>[[bin]]</code> entry in
+    <code>Cargo.toml</code> pointing to its own source file.
+  </p>
+
+  <div class="diagram">
+    mcp-server/src/main.rs &nbsp;&nbsp;→&nbsp;&nbsp; <code>cargo run --bin mcp-server</code><br>
+    mcp-server/src/extract.rs →&nbsp;&nbsp; <code>cargo run --bin extract</code>
+  </div>
+
+  <p>
+    They share the same dependencies but are compiled into separate executables.
+    The extractor is a one-shot batch process; the server is long-running. Keeping
+    them separate means you can run extraction without starting the MCP server.
+  </p>
+
+  <h2>If you know Java: the concepts in this lesson translated</h2>
+
+  <h3>Path vs PathBuf — like &amp;str vs String, applied to file paths</h3>
+
+  <p>
+    Java's <code>java.nio.file.Path</code> is a single type that handles both cases.
+    Rust splits it into two: <code>Path</code> is a borrowed reference (you're reading
+    someone else's path); <code>PathBuf</code> is an owned value (you hold the path data).
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java (java.nio.file)</th><th>Rust (std::path)</th></tr></thead>
+    <tbody>
+      <tr><td><code>Path.of("../kuka-docs")</code></td><td><code>Path::new("../kuka-docs")</code></td></tr>
+      <tr><td><code>path.resolve("file.pdf")</code></td><td><code>path.join("file.pdf")</code> → returns a new <code>PathBuf</code></td></tr>
+      <tr><td><code>path.getFileName().toString()</code></td><td><code>path.file_name().unwrap().to_string_lossy()</code></td></tr>
+      <tr><td><code>path.toString()</code></td><td><code>path.display()</code> — formats the path for printing</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    The extra step <code>to_string_lossy()</code> has no Java equivalent because Java's
+    <code>String</code> is always valid Unicode. Rust filenames can theoretically contain
+    non-Unicode bytes on Linux, so the OS returns an <code>OsStr</code> which you convert
+    — <code>to_string_lossy()</code> replaces any invalid bytes with <code>?</code> rather
+    than panicking. For KUKA's ASCII filenames, this is always a no-op.
+    <a href="https://doc.rust-lang.org/std/path/struct.Path.html" target="_blank">[Path — std docs]</a>
+  </p>
+
+  <h3>The ? operator — checked exception propagation as a return value</h3>
+
+  <p>
+    In Java you propagate errors with <code>throws</code>:
+  </p>
+
+  <pre><code>// Java
+String text = Files.readString(path);  // throws IOException
+// caller must declare throws IOException or wrap in try-catch</code></pre>
+
+  <p>
+    In Rust, errors are <code>Result</code> values (not exceptions). The <code>?</code>
+    operator is shorthand for: "if this returned <code>Err</code>, return that error from
+    the current function immediately; otherwise unwrap the <code>Ok</code> value."
+  </p>
+
+  <pre><code>// Rust
+let text = pdf_extract::extract_text(pdf_path)?;
+// If extraction fails, the function returns Err(...) here and stops.
+// If it succeeds, `text` holds the String.</code></pre>
+
+  <p>
+    This is why <code>main</code> returns <code>Result&lt;()&gt;</code> — it needs
+    somewhere to propagate errors to, just like Java's
+    <code>public static void main(String[] args) throws Exception</code>.
+  </p>
+
+  <h3>std::fs::write() — Files.write(), Rust edition</h3>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java (java.nio.file)</th><th>Rust (std::fs)</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Files.writeString(path, content);</code></td>
+        <td><code>std::fs::write(&amp;path, &amp;content)?;</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    Both overwrite the file if it exists and create it if it doesn't. There is no explicit
+    <code>close()</code> — Rust automatically closes file handles when the value goes out
+    of scope (the same idea as Java's try-with-resources, but always on, requiring no
+    syntax).
+  </p>
+
+  <h2>New concept: Path in Rust</h2>
+
+  <p>
+    Rust has two path types in <code>std::path</code>:
+  </p>
+
+  <ul>
+    <li><code>Path</code> — a borrowed reference to a path string, like <code>&str</code></li>
+    <li><code>PathBuf</code> — an owned, growable path, like <code>String</code></li>
+  </ul>
+
+  <p>
+    <code>Path::new("../kuka-docs")</code> creates a path reference.
+    <code>path.join("file.pdf")</code> appends a component and returns a new
+    <code>PathBuf</code>. <code>path.file_stem()</code> returns the filename
+    without its extension. Because filenames can contain non-UTF-8 bytes on some
+    systems, these methods return <code>OsStr</code>, which you convert to a
+    normal string with <code>to_string_lossy()</code>.
+    <a href="https://doc.rust-lang.org/std/path/struct.Path.html" target="_blank">[Path — std docs]</a>
+  </p>
+
+  <h2>Step 1 — Add the dependency</h2>
+
+  <p>Inside your dev container terminal:</p>
+
+  <pre><code>cargo add pdf-extract</code></pre>
+
+  <h2>Step 2 — Declare both binaries in Cargo.toml</h2>
+
+  <p>
+    Open <code>mcp-server/Cargo.toml</code> and add these two sections after
+    the <code>[package]</code> block:
+  </p>
+
+  <pre><code>[[bin]]
+name = "mcp-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "extract"
+path = "src/extract.rs"</code></pre>
+
+  <p>
+    Once you add any explicit <code>[[bin]]</code> entry, Cargo stops
+    auto-detecting <code>src/main.rs</code>, so you must declare both.
+  </p>
+
+  <h2>Step 3 — Write src/extract.rs</h2>
+
+  <p>
+    Create <code>mcp-server/src/extract.rs</code> with this content:
+  </p>
+
+  <pre><code>use anyhow::Result;
+use std::path::Path;
+
+fn main() -> Result&lt;()&gt; {
+    let pdf_path = Path::new("../kuka-docs/KUKA Technical Note -Reflector Deployment- V1.0.1.pdf");
+    let knowledge_dir = Path::new("../knowledge");
+
+    println!("Extracting: {}", pdf_path.display());
+    let text = pdf_extract::extract_text(pdf_path)?;
+
+    // Build the output filename: lowercase, spaces become dashes
+    let stem = pdf_path.file_stem().unwrap().to_string_lossy();
+    let filename = pdf_path.file_name().unwrap().to_string_lossy();
+    let slug = stem.to_lowercase()
+        .replace(' ', "-")
+        .replace(['.', '(', ')'], "");
+
+    // Write the OKF file
+    let okf = format!(
+"---
+type: technical-note
+title: {stem}
+description: Extracted from KUKA documentation.
+resource: kuka-docs/{filename}
+tags: [extracted, technical-note]
+timestamp: 2026-06-26T00:00:00Z
+---
+
+{body}",
+        stem = stem,
+        filename = filename,
+        body = text.trim(),
+    );
+
+    let output = knowledge_dir.join(format!("{slug}.md"));
+    std::fs::write(&output, &okf)?;
+    println!("Wrote: {}", output.display());
+
+    Ok(())
+}</code></pre>
+
+  <h3>Walking through the code</h3>
+
+  <p>
+    <code>pdf_extract::extract_text(pdf_path)?</code> reads the entire PDF and
+    returns the text content as a <code>String</code>. The <code>?</code>
+    propagates any error (file not found, corrupt PDF) up to <code>main</code>
+    which returns it as an <code>anyhow::Result</code>.
+  </p>
+
+  <p>
+    <code>to_string_lossy()</code> converts the OS filename to a Rust
+    <code>String</code>, replacing any non-UTF-8 bytes with <code>?</code>.
+    KUKA filenames are all ASCII so this is safe — but it's the correct
+    Rust idiom regardless.
+  </p>
+
+  <p>
+    <code>std::fs::write(&output, &okf)?</code> creates or overwrites the file
+    in one call. No file handle, no explicit close — Rust drops the file when
+    the function returns.
+  </p>
+
+  <h2>Step 4 — Build and run</h2>
+
+  <p>
+    Run from inside the <code>mcp-server/</code> directory so the relative
+    paths (<code>../kuka-docs/</code>, <code>../knowledge/</code>) resolve
+    correctly:
+  </p>
+
+  <pre><code>cargo run --bin extract</code></pre>
+
+  <p>
+    You should see:
+  </p>
+
+  <pre><code>Extracting: ../kuka-docs/KUKA Technical Note -Reflector Deployment- V1.0.1.pdf
+Wrote: ../knowledge/kuka-technical-note--reflector-deployment--v101.md</code></pre>
+
+  <h2>Step 5 — Inspect the output</h2>
+
+  <pre><code>cat ../knowledge/kuka-technical-note--reflector-deployment--v101.md | head -20</code></pre>
+
+  <p>
+    You should see the OKF frontmatter followed by extracted text. The text will
+    be raw — no headings, no formatting, just the words pulled from the PDF.
+    That is expected at this stage. Lesson 9 adds structure to the output.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">If the text looks garbled</div>
+    <p>
+      Some PDFs store text as glyph indices rather than Unicode characters.
+      <code>pdf-extract</code> handles most cases but may struggle with
+      embedded fonts. If you see garbage characters, paste the first few lines
+      into chat — we will decide whether to switch to a more capable crate or
+      pre-process that specific file.
+    </p>
+  </div>
+
+  <div class="callout">
+    <div class="callout-label">What you just proved</div>
+    <p>
+      A Rust binary read a KUKA PDF, extracted its text, wrapped it in OKF
+      frontmatter, and wrote it to the knowledge bundle. The
+      <code>search_docs</code> tool now has real content to search — the wiring
+      comes in Lesson 9.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/std/path/struct.Path.html" target="_blank">
+        <strong>std::path::Path — Rust standard library docs</strong>
+      </a><br>
+      The complete reference for path manipulation in Rust. The methods
+      <code>join</code>, <code>file_stem</code>, <code>file_name</code>, and
+      <code>display</code> are the ones you will reach for most. Read the
+      <code>PathBuf</code> page alongside it.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "What does to_string_lossy actually do with non-UTF-8 bytes?",
+    "Why does Rust have both Path and PathBuf instead of just one type?",
+    or "How do I process all PDFs in a directory instead of one at a time?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0007-okf-bundle-design.html">← Lesson 7: OKF Bundle Design</a>
+    <a href="0009-search-the-bundle.html">Lesson 9: Search the Bundle →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "Why is the extractor a separate binary rather than code inside the MCP server?",
+    options: [
+      "Extraction is a one-shot batch process; the server is long-running — different lifecycles",
+      "Rust does not allow file I/O inside a binary that also uses async/await",
+      "The pdf-extract crate conflicts with the rmcp crate at the type level",
+      "Cargo requires separate binaries for code that uses std::fs"
+    ],
+    correct: 0,
+    explanation: "The extractor runs once (or on demand) to populate the knowledge bundle. The server runs continuously to answer queries. Mixing them would force you to restart the server every time you re-extract."
+  },
+  {
+    question: "What does to_string_lossy() do that a plain .to_str() would not?",
+    options: [
+      "It always returns a String by replacing non-UTF-8 bytes with a replacement character",
+      "It trims leading and trailing whitespace from the path component",
+      "It converts backslashes to forward slashes for cross-platform compatibility",
+      "It returns an owned String instead of a borrowed string slice"
+    ],
+    correct: 0,
+    explanation: "to_str() returns None if the path contains non-UTF-8 bytes. to_string_lossy() always succeeds by replacing problematic bytes with the Unicode replacement character — safer for filenames from arbitrary sources."
+  },
+  {
+    question: "What does std::fs::write do if the output file already exists?",
+    options: [
+      "It overwrites the file completely with the new content",
+      "It appends the new content to the end of the existing file",
+      "It returns an error so you can decide whether to overwrite",
+      "It creates a numbered backup before overwriting"
+    ],
+    correct: 0,
+    explanation: "std::fs::write creates the file if it doesn't exist and overwrites it entirely if it does. There is no append behaviour — use std::fs::OpenOptions if you need that."
+  },
+  {
+    question: "Why must you declare src/main.rs explicitly in Cargo.toml once you add a [[bin]] section?",
+    options: [
+      "Adding any [[bin]] section disables Cargo's auto-detection of src/main.rs",
+      "Cargo requires all binaries to be declared in alphabetical order",
+      "The [[bin]] section replaces the [package] section for binary projects",
+      "Auto-detection only works when the project has no dependencies"
+    ],
+    correct: 0,
+    explanation: "Cargo auto-detects src/main.rs only when no [[bin]] sections exist. As soon as you add one, you take over full control and must list every binary you want built."
+  }
+]);
+</script>
+</body>
+</html>

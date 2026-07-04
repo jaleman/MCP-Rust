@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 6: Connecting to an AI Client</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 6</div>
+    <h1>Connecting to an AI Client</h1>
+    <div class="lesson-meta">
+      <span>~20 minutes</span>
+      <span>Configuration — dev container + AI clients</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're building</h2>
+
+  <p>
+    So far you have tested your server by typing raw JSON-RPC into a terminal.
+    This lesson connects it to a real AI client — either GitHub Copilot or
+    Claude Code — so you can ask natural-language questions and watch the tool
+    be called for real.
+  </p>
+
+  <h2>The key concept: where does the client run?</h2>
+
+  <p>
+    The right configuration depends on <em>where</em> the AI client executes,
+    because that determines whether it can reach the binary directly or needs to
+    cross a container boundary.
+  </p>
+
+  <div class="diagram">
+    Windows host<br>
+    &nbsp;&nbsp;&nbsp;→ VS Code UI (renders the interface only)<br>
+    &nbsp;&nbsp;&nbsp;→ Claude Code CLI ← runs here, on Windows<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;↕ remote extension protocol<br>
+    &nbsp;&nbsp;&nbsp;→ Dev container (Linux)<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ VS Code Server<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ GitHub Copilot extension ← runs here, inside container<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;→ your MCP binary ← lives here
+  </div>
+
+  <p>
+    Copilot is co-located with the binary — it can call it directly.
+    Claude Code is on Windows — it must cross the container boundary via
+    <code>docker exec</code>.
+  </p>
+
+  <h2>You never run the server yourself</h2>
+
+  <p>
+    With either client, there is no <code>cargo run</code> step.
+    The AI client launches the binary as a subprocess on demand, piping
+    stdin and stdout as the MCP transport. When the conversation ends, the
+    process exits. Your two responsibilities:
+  </p>
+
+  <ol>
+    <li><strong>Binary compiled</strong> — run <code>cargo build</code> after any code change</li>
+    <li><strong>Dev container running</strong> — always true while developing in VS Code</li>
+  </ol>
+
+  <hr style="margin: 2.5rem 0; border: none; border-top: 1px solid var(--border);">
+
+  <h2>Option A — GitHub Copilot</h2>
+
+  <p>
+    Copilot extensions run inside the dev container. The binary is at
+    <code>/workspaces/MCP-Rust/mcp-server/target/debug/mcp-server</code>
+    — Copilot can call it directly.
+  </p>
+
+  <h3>Configuration: <code>.vscode/mcp.json</code></h3>
+
+  <p>This file is already in place at the workspace root:</p>
+
+  <pre><code>{
+  "servers": {
+    "kuka": {
+      "command": "/workspaces/MCP-Rust/mcp-server/target/debug/mcp-server"
+    }
+  }
+}</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">VS Code key vs Claude Desktop key</div>
+    <p>
+      VS Code uses <code>"servers"</code> as the root key.
+      Claude Desktop uses <code>"mcpServers"</code>.
+      They are different formats — mixing them up silently breaks the connection.
+    </p>
+  </div>
+
+  <h3>Steps</h3>
+
+  <ol>
+    <li>Reload VS Code: <code>Ctrl+Shift+P → Developer: Reload Window</code></li>
+    <li>Approve the server when prompted, or check with <code>MCP: List Servers</code></li>
+    <li>Open Copilot Chat, switch to <strong>Agent</strong> mode</li>
+    <li>Ask: <em>Please ping the KUKA knowledge server.</em></li>
+  </ol>
+
+  <hr style="margin: 2.5rem 0; border: none; border-top: 1px solid var(--border);">
+
+  <h2>Option B — Claude Code</h2>
+
+  <p>
+    Claude Code runs on the Windows host. It cannot execute a Linux binary
+    directly, so it uses <code>docker exec</code> to reach inside the named
+    container.
+  </p>
+
+  <p>
+    The right way to register the server is with the <code>claude mcp add</code>
+    command. This writes the server to Claude Code's user-level registry, making
+    it available in <strong>every session automatically</strong> — no folder setup
+    required each time.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Why not .mcp.json?</div>
+    <p>
+      <code>.mcp.json</code> is project-scoped and only loads when its containing
+      folder is part of the active session. In the Claude Code desktop app, you
+      would need to add the folder to every new session manually.
+      <code>claude mcp add</code> registers the server globally and removes that
+      friction entirely.
+    </p>
+  </div>
+
+  <h3>Step 1 — Confirm the container name</h3>
+
+  <p>
+    The <code>devcontainer.json</code> includes
+    <code>"runArgs": ["--name=kuka-mcp-server"]</code>. Verify the container is
+    running with that name:
+  </p>
+
+  <pre><code>docker ps --format "{{.Names}}"</code></pre>
+
+  <p>You should see <code>kuka-mcp-server</code> in the list.</p>
+
+  <h3>Step 2 — Register the server</h3>
+
+  <p>Run this once in PowerShell:</p>
+
+  <pre><code>claude mcp add kuka -- docker exec -i kuka-mcp-server /workspaces/MCP-Rust/mcp-server/target/debug/mcp-server</code></pre>
+
+  <p>Verify it was registered:</p>
+
+  <pre><code>claude mcp list</code></pre>
+
+  <h3>Step 3 — Use it</h3>
+
+  <p>
+    Start any new session in the Claude Code app. The <code>kuka</code> server
+    will be available without adding any folder. Ask:
+  </p>
+
+  <pre><code>Please ping the KUKA knowledge server.</code></pre>
+
+  <hr style="margin: 2.5rem 0; border: none; border-top: 1px solid var(--border);">
+
+  <h2>How to verify a tool was actually called</h2>
+
+  <p>
+    AI clients can read your source code and <strong>simulate</strong> a tool
+    response without ever invoking the binary. This looks convincing but is not a
+    real MCP call. Always look for an explicit tool-use step:
+  </p>
+
+  <pre><code>Ran ping — kuka (MCP Server)
+Input:  {}
+Output: KUKA Knowledge server is online and ready.</code></pre>
+
+  <p>
+    If you see that block, your Rust binary ran. If you only see prose with no
+    tool-use step, the client read the code and guessed. The tool-use block is
+    the only trustworthy confirmation.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">What you just proved</div>
+    <p>
+      The AI client launched your Rust binary as a subprocess, sent an MCP message
+      over stdin, and received the response your code returned over stdout.
+      The full pipeline — agent → MCP protocol → Rust binary → response — is
+      working end to end.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://code.visualstudio.com/docs/agent-customization/mcp-servers" target="_blank">
+        <strong>MCP Servers in VS Code — code.visualstudio.com</strong>
+      </a><br>
+      The official VS Code documentation for adding and managing MCP servers in
+      Copilot Agent mode. Covers the full <code>mcp.json</code> schema and how
+      to debug server connections.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "How do I see the stderr logs from my server when an AI client is running it?",
+    "What happens if I change the code without running cargo build?",
+    or "Can I connect both Copilot and Claude Code to the same server at the same time?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0005-tools-with-parameters.html">← Lesson 5: Tools with Parameters</a>
+    <a href="0007-okf-bundle-design.html">Lesson 7: OKF Bundle Design →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "Where does the GitHub Copilot extension run when connected to a dev container?",
+    options: [
+      "Inside the dev container, alongside your code and binary",
+      "On the Windows host, alongside the VS Code UI",
+      "In a separate Docker container managed by Copilot",
+      "On Anthropic's servers via the Copilot cloud service"
+    ],
+    correct: 0,
+    explanation: "VS Code extensions run inside the dev container when connected remotely. The Windows side only renders the UI. This is why Copilot can launch the Linux binary directly without docker exec."
+  },
+  {
+    question: "Why does Claude Code need docker exec but Copilot does not?",
+    options: [
+      "Claude Code runs on Windows and must cross the container boundary to reach the binary",
+      "Claude Code uses a different MCP transport that requires Docker as middleware",
+      "Copilot is granted special permission to access Docker containers directly",
+      "Claude Code cannot read .vscode/mcp.json so it uses docker exec as a fallback"
+    ],
+    correct: 0,
+    explanation: "Claude Code runs on the Windows host and cannot execute a Linux binary directly. docker exec bridges Windows to the Linux binary inside the container. Copilot is already inside the container so it needs no bridge."
+  },
+  {
+    question: "How can you confirm Copilot actually called your MCP tool rather than simulating a response?",
+    options: [
+      "Copilot shows an explicit 'Ran ping — kuka (MCP Server)' tool-use block",
+      "The response appears faster than a simulated answer would",
+      "Copilot adds a disclaimer saying the response was tool-generated",
+      "The tool name appears highlighted in the Copilot chat sidebar"
+    ],
+    correct: 0,
+    explanation: "A real MCP call always shows a tool-use block with the server name, input, and output. Without that block, the client may be reading your source code and guessing the response."
+  },
+  {
+    question: "What root key does VS Code's mcp.json use, and how does it differ from Claude Code's .mcp.json?",
+    options: [
+      "VS Code uses \"servers\"; Claude Code and Claude Desktop use \"mcpServers\"",
+      "VS Code uses \"mcpServers\"; Claude Code uses \"servers\"",
+      "Both use \"servers\" — the formats are identical across all clients",
+      "Both use \"mcpServers\" — VS Code adopted the Claude Desktop format"
+    ],
+    correct: 0,
+    explanation: "VS Code's mcp.json uses \"servers\" as the root key. Claude Code's .mcp.json and Claude Desktop's config both use \"mcpServers\". Using the wrong key silently breaks the connection."
+  }
+]);
+</script>
+</body>
+</html>

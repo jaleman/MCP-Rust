@@ -1,1 +1,10 @@
-/target
+target/
+extract.exe
+
+knowledge/
+kuka-docs/
+kuka-docs - Copy/
+
+.mcp.json
+mcp.json
+.claude/settings.local.json

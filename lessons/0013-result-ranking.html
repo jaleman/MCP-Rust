@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 13: Result Ranking</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 13</div>
+    <h1>Result Ranking</h1>
+    <div class="lesson-meta">
+      <span>~20 minutes</span>
+      <span>Hands-on — edit, build, test in your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're fixing</h2>
+
+  <p>
+    Right now, matching documents are returned in whatever order the filesystem hands them back —
+    essentially random. If two documents both contain your query terms but one is far more
+    relevant, there is no guarantee it appears first. As the knowledge bundle grows, this will
+    increasingly matter.
+  </p>
+
+  <p>
+    This lesson adds a simple relevance score: the total number of times the query terms appear
+    in the document. A document that mentions "reflector" twelve times is almost certainly more
+    relevant than one that mentions it once. Results are sorted by this score, highest first,
+    before being returned to the AI client.
+  </p>
+
+  <div class="diagram">
+    "reflector deployment" query matches two documents:<br><br>
+    Before: returned in filesystem order (unpredictable)<br><br>
+    After:&nbsp; Reflector Deployment Guide — score 18  ← first<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Fleet Operations Manual&nbsp;&nbsp; — score 3&nbsp;&nbsp; ← second
+  </div>
+
+  <h2>New concepts — translated from Java</h2>
+
+  <h3>Concept 1: Tuples — anonymous pairs (and triples, and more)</h3>
+
+  <p>
+    Java has no built-in tuple type. When you need to pass a pair of values together you
+    typically reach for <code>Map.Entry</code>, a custom record, or a library like
+    Apache Commons Pair. Rust has tuples built into the language:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Map.Entry&lt;Integer, String&gt;</code></td>
+        <td><code>(usize, String)</code></td>
+      </tr>
+      <tr>
+        <td><code>entry.getKey()</code></td>
+        <td><code>tuple.0</code></td>
+      </tr>
+      <tr>
+        <td><code>entry.getValue()</code></td>
+        <td><code>tuple.1</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    Fields are accessed by position — <code>.0</code>, <code>.1</code>, <code>.2</code> — not
+    by name. You can also <strong>destructure</strong> a tuple in a closure parameter, which
+    lets you give the fields meaningful names on the spot:
+  </p>
+
+  <pre><code>let pair: (usize, String) = (18, "Reflector Deployment Guide".to_string());
+
+// Field access by position
+println!("{}", pair.0);  // 18
+println!("{}", pair.1);  // Reflector Deployment Guide
+
+// Destructuring — name the fields as you unpack
+let (score, title) = pair;
+println!("{score}: {title}");
+
+// Destructuring inside a closure parameter
+results.iter().map(|(score, text)| format!("[{score}] {text}"));
+
+// _ discards a field you don't need
+results.iter().map(|(_, text)| text);</code></pre>
+
+  <h3>Concept 2: .map() — transform every element</h3>
+
+  <p>
+    <code>.map()</code> is the iterator method you reach for when you need to convert each
+    element into something else. Java's equivalent is <code>Stream.map()</code>.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>stream.map(t -&gt; lower.split(t, -1).length - 1)</code></td>
+        <td><code>.map(|term| lower.matches(*term).count())</code></td>
+      </tr>
+      <tr>
+        <td><code>.mapToInt(...).sum()</code></td>
+        <td><code>.sum()</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    <a href="https://doc.rust-lang.org/std/primitive.str.html#method.matches" target="_blank"><code>str::matches(pattern)</code></a>
+    returns an iterator over every non-overlapping occurrence of the pattern in the string.
+    Chaining <code>.count()</code> converts that into a number. So
+    <code>lower.matches(*term).count()</code> is "how many times does this term appear?"
+  </p>
+
+  <p>
+    <code>.sum()</code> at the end adds up all the counts from each term into a single
+    <code>usize</code> score. The full expression:
+  </p>
+
+  <pre><code>let score: usize = terms.iter()
+    .map(|term| lower.matches(*term).count())
+    .sum();</code></pre>
+
+  <p>reads as: "for each query term, count how many times it appears, then add the counts together."</p>
+
+  <h3>Concept 3: sort_by() — sorting with a custom comparator</h3>
+
+  <p>
+    Java sorts a list with a <code>Comparator</code>:
+    <code>list.sort(Comparator.comparingInt(e -&gt; -e.score))</code>.
+    Rust's equivalent is <code>Vec::sort_by()</code> with a closure:
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>list.sort((a, b) -&gt; b.score - a.score)</code></td>
+        <td><code>results.sort_by(|a, b| b.0.cmp(&amp;a.0))</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    <code>b.0.cmp(&amp;a.0)</code> compares <code>b</code>'s score against <code>a</code>'s.
+    See <a href="appendix-03-sorting.html">Appendix 3: Sorting</a> for a full Java-to-Rust
+    comparison with worked examples.
+    Because the arguments are in reverse order (<code>b</code> first), higher scores sort to
+    the front. <code>.cmp()</code> returns an
+    <a href="https://doc.rust-lang.org/std/cmp/enum.Ordering.html" target="_blank"><code>Ordering</code></a>
+    value — <code>Less</code>, <code>Equal</code>, or <code>Greater</code> — which is what
+    <code>sort_by</code> expects. This is Rust's equivalent of a Java comparator returning
+    a negative, zero, or positive integer.
+  </p>
+
+  <h2>Step 1 — Change the results type</h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code>. At the top of <code>search_docs</code>, change
+    the <code>results</code> declaration from a <code>Vec&lt;String&gt;</code> to a
+    <code>Vec</code> of tuples:
+  </p>
+
+  <p><strong>Before:</strong></p>
+  <pre><code>let mut results: Vec&lt;String&gt; = Vec::new();</code></pre>
+
+  <p><strong>After:</strong></p>
+  <pre><code>let mut results: Vec&lt;(usize, String)&gt; = Vec::new();</code></pre>
+
+  <h2>Step 2 — Compute a score and push a tuple</h2>
+
+  <p>
+    Inside the inner <code>if let Ok(content)</code> block, replace the final
+    <code>results.push(...)</code> call:
+  </p>
+
+  <p><strong>Before:</strong></p>
+  <pre><code>results.push(format!(
+    "• {title}\n  Source: {resource}\n\n  ...{excerpt}..."
+));</code></pre>
+
+  <p><strong>After:</strong></p>
+  <pre><code>let score: usize = terms.iter()
+    .map(|term| lower.matches(*term).count())
+    .sum();
+
+results.push((
+    score,
+    format!("• {title}\n  Source: {resource}\n\n  ...{excerpt}..."),
+));</code></pre>
+
+  <h2>Step 3 — Sort and format</h2>
+
+  <p>
+    Replace the final <code>let text = ...</code> block:
+  </p>
+
+  <p><strong>Before:</strong></p>
+  <pre><code>let text = if results.is_empty() {
+    format!("No results found for '{}'.", input.query)
+} else {
+    format!(
+        "Found {} result(s) for '{}':\n\n{}",
+        results.len(),
+        input.query,
+        results.join("\n\n")
+    )
+};</code></pre>
+
+  <p><strong>After:</strong></p>
+  <pre><code>results.sort_by(|a, b| b.0.cmp(&amp;a.0));
+
+let text = if results.is_empty() {
+    format!("No results found for '{}'.", input.query)
+} else {
+    let ranked: Vec&lt;String&gt; = results.into_iter().map(|(_, text)| text).collect();
+    format!(
+        "Found {} result(s) for '{}':\n\n{}",
+        ranked.len(),
+        input.query,
+        ranked.join("\n\n")
+    )
+};</code></pre>
+
+  <h3>What changed and why</h3>
+
+  <ul>
+    <li>
+      <code>results.sort_by(|a, b| b.0.cmp(&amp;a.0))</code> — sorts the tuple Vec
+      in-place, highest score first. The <code>.0</code> accesses the score field of
+      each tuple.
+    </li>
+    <li>
+      <code>results.into_iter()</code> — consumes the Vec, yielding owned tuples rather
+      than references. This is needed here because the next step moves the
+      <code>String</code> out of each tuple, which is not possible with a borrowed
+      reference.
+    </li>
+    <li>
+      <code>.map(|(_, text)| text)</code> — destructures each tuple in the closure
+      parameter, discards the score with <code>_</code>, and returns only the formatted
+      string. The result is a plain <code>Vec&lt;String&gt;</code> that <code>.join()</code>
+      can work with.
+    </li>
+  </ul>
+
+  <h2>Step 4 — Build and test</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    With only a few documents in the bundle the ranking effect is subtle, but you can verify
+    scoring works by searching for a term that appears many times in one document and rarely
+    in another. The document with more occurrences should appear first.
+  </p>
+
+  <pre><code>What are the reflector deployment requirements?</code></pre>
+
+  <p>
+    If the Reflector Deployment Guide is in your bundle, it should rank above any other
+    document that happens to mention "reflector" in passing.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Scoring fuzzy matches</div>
+    <p>
+      The score counts only <em>exact</em> substring occurrences via
+      <code>str::matches()</code>. A document matched by fuzzy logic (e.g. "reflecor" → "reflector")
+      will score zero for that term even though it was included in the results. This is
+      acceptable for now — fuzzy matches are already lower-confidence, so under-scoring
+      them is a reasonable default. A future improvement would count near-matches at a
+      fractional weight.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by" target="_blank">
+        <strong>slice::sort_by — Rust standard library docs</strong>
+      </a><br>
+      Documents the sort method used in this lesson. While you're there, look at
+      <code>sort_by_key()</code> — it's a cleaner alternative when you're sorting by a
+      single extracted value: <code>results.sort_by_key(|(score, _)| std::cmp::Reverse(*score))</code>.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "What is std::cmp::Reverse and how does sort_by_key work?",
+    "How would I cap the number of results returned to the top 5?",
+    or "What is the difference between into_iter() and iter() when I'm consuming the Vec?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0012-stop-words.html">← Lesson 12: Stop Word Filtering</a>
+    <a href="0014-list-documents.html">Lesson 14: List Documents Tool →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What does .map(|term| lower.matches(*term).count()) produce for each term?",
+    options: [
+      "true or false — whether the term appears anywhere in the document",
+      "The byte position of the first occurrence of the term in the document",
+      "The number of times that exact term appears in the document",
+      "An iterator over every line in the document that contains the term"
+    ],
+    correct: 2,
+    explanation: "str::matches() returns an iterator over every non-overlapping occurrence of the pattern. .count() drains it and returns the total as a usize. The result for each term is its occurrence count in the document."
+  },
+  {
+    question: "Why does results.sort_by(|a, b| b.0.cmp(&a.0)) sort highest score first?",
+    options: [
+      "sort_by always places elements with larger values first by default",
+      "The arguments are swapped: b.0.cmp(&a.0) puts higher scores at the front",
+      "usize implements a reverse ordering that makes cmp() sort descending",
+      ".cmp() returns Ordering::Less for equal values, which reverses the sort"
+    ],
+    correct: 1,
+    explanation: "sort_by places a before b when the comparator returns Less. b.0.cmp(&a.0) returns Less when b's score is less than a's — meaning a (higher score) goes first. Swapping b and a in the cmp call is the standard idiom for descending order."
+  },
+  {
+    question: "What does _ mean in the closure parameter |(_, text)|?",
+    options: [
+      "It matches the score field and discards it — no unused-variable warning is emitted",
+      "It signals that the closure takes no parameters and text is a captured variable",
+      "It is a placeholder for a parameter whose type Rust cannot infer at compile time",
+      "It causes the iterator to skip this element and advance to the next one"
+    ],
+    correct: 0,
+    explanation: "_ is Rust's discard pattern. It matches any value and intentionally throws it away. Using _ instead of a name like _score suppresses the unused-variable compiler warning. It is read as 'I know there is a value here and I am deliberately ignoring it.'"
+  },
+  {
+    question: "What type does (18, \"Reflector Guide\".to_string()) produce in Rust?",
+    options: [
+      "Map.Entry<Integer, String> — the standard key-value pair type",
+      "Pair<usize, String> — the anonymous pair type from std::collections",
+      "Vec<usize, String> — a two-element heterogeneous vector",
+      "(usize, String) — an anonymous tuple with a usize and a String"
+    ],
+    correct: 3,
+    explanation: "Rust has built-in tuple types written as (T1, T2, ...). A tuple literal is written with the values in parentheses separated by commas. There is no named Pair or Entry type needed — the type is the shape of the values themselves."
+  }
+]);
+</script>
+</body>
+</html>

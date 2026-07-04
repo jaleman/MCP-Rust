@@ -1,0 +1,26 @@
+{
+  "name": "KUKA MCP Server — Rust",
+  "image": "mcr.microsoft.com/devcontainers/rust:latest",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        },
+        "workbench.startupEditor": "none",
+        "workbench.welcomePage.walkthroughs.openOnInstall": false,
+        "rust-analyzer.procMacro.enable": true,
+        "rust-analyzer.procMacro.attributes.enable": true,
+        "rust-analyzer.cargo.buildScripts.enable": true
+      }
+    }
+  },
+  "runArgs": ["--name=kuka-mcp-server"],
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y mingw-w64 poppler-utils && rustup target add x86_64-pc-windows-gnu && rustc --version && cargo --version"
+}

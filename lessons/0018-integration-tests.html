@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 18: Integration Tests</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 18</div>
+    <h1>Integration Tests</h1>
+    <div class="lesson-meta">
+      <span>~25 minutes</span>
+      <span>Hands-on — edit, build, test in your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're building</h2>
+
+  <p>
+    Unit tests from <a href="0016-unit-tests.html">Lesson 16</a> cover the pure helper
+    functions. This lesson tests the MCP tools themselves — <code>search_docs</code> and
+    <code>list_docs</code> — by creating a real temporary directory, writing a known OKF
+    file into it, pointing the server at it via <code>KUKA_KNOWLEDGE_DIR</code>, and
+    verifying the output.
+  </p>
+
+  <p>
+    These are <strong>integration tests</strong>: they exercise the full path through the
+    code including filesystem I/O, just with controlled test data instead of your real
+    knowledge bundle.
+  </p>
+
+  <h2>New concepts — translated from Java</h2>
+
+  <h3>Concept 1: Filesystem helpers in std::fs</h3>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java (NIO)</th><th>Rust (std::fs)</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Files.createDirectories(path)</code></td>
+        <td><code>std::fs::create_dir_all(&amp;path)</code></td>
+      </tr>
+      <tr>
+        <td><code>Files.writeString(path, content)</code></td>
+        <td><code>std::fs::write(&amp;path, content)</code></td>
+      </tr>
+      <tr>
+        <td><code>FileUtils.deleteDirectory(dir)</code></td>
+        <td><code>std::fs::remove_dir_all(&amp;dir)</code></td>
+      </tr>
+      <tr>
+        <td><code>System.getProperty("java.io.tmpdir")</code></td>
+        <td><code>std::env::temp_dir()</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    <code>create_dir_all</code> is the equivalent of <code>mkdir -p</code> — it creates
+    all intermediate directories and does not fail if the directory already exists.
+    <code>remove_dir_all</code> is <code>rm -rf</code> — it deletes the directory and
+    everything inside it.
+  </p>
+
+  <h3>Concept 2: std::env::set_var() — global state warning</h3>
+
+  <p>
+    <code>std::env::set_var("KEY", "value")</code> sets an environment variable for the
+    current process — the equivalent of Java's <code>System.setProperty()</code>. The
+    important caveat: environment variables are <strong>global process state</strong>.
+    If two tests run in parallel and both call <code>set_var</code> with different values,
+    they will interfere with each other.
+  </p>
+
+  <p>
+    In Rust 2024 edition (which this project uses), <code>set_var</code> is also marked
+    <strong>unsafe</strong> because modifying global state in a multi-threaded context can
+    cause data races. You must wrap every call in an <code>unsafe { }</code> block to
+    acknowledge this explicitly. Running with <code>--test-threads=1</code> is still
+    required to prevent the races at runtime — the <code>unsafe</code> block is just the
+    compiler requiring you to confirm you are aware of the risk.
+  </p>
+
+  <p>
+    The fix is to tell <code>cargo test</code> to run tests one at a time:
+  </p>
+
+  <pre><code># The -- separator passes flags to the test binary rather than to cargo itself.
+# --test-threads=1 prevents parallel execution, avoiding env var interference.
+cargo test integration -- --test-threads=1</code></pre>
+
+  <h3>Concept 3: Debug formatting for assertions</h3>
+
+  <p>
+    The MCP <code>CallToolResult</code> type is not a plain <code>String</code>, so you
+    cannot compare it directly to a string. The simplest way to inspect it in a test is
+    to format it using the <code>Debug</code> trait — the same <code>{:?}</code> format
+    you use in <code>println!</code>:
+  </p>
+
+  <pre><code>// Convert the entire result struct to a debug string for assertion.
+// The string will contain all field names and values, including the text content.
+let output = format!("{:?}", result);
+assert!(output.contains("Reflector Guide"));</code></pre>
+
+  <p>
+    This is pragmatic rather than elegant — it works reliably because the text content
+    is embedded in the debug output. A more precise alternative would be to match on
+    the <code>Content</code> enum variant directly, but that requires knowing the exact
+    rmcp type structure.
+  </p>
+
+  <h2>Step 1 — Add the integration test module</h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code>. Add this module after the existing
+    <code>#[cfg(test)] mod tests { ... }</code> unit test block:
+  </p>
+
+  <pre><code>#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    // Creates a temporary directory and writes one known OKF document into it.
+    // Returns the path to the directory so tests can point KUKA_KNOWLEDGE_DIR at it.
+    fn setup_test_bundle() -> PathBuf {
+        let dir = std::env::temp_dir().join("kuka-integration-tests");
+        // create_dir_all is like mkdir -p — safe to call if the dir already exists
+        fs::create_dir_all(&dir).unwrap();
+
+        // A minimal but valid OKF document containing known searchable text
+        let doc = "\
+---
+type: technical-note
+title: Reflector Guide
+description: Test document for integration tests.
+resource: kuka-docs/test.pdf
+tags: [test]
+timestamp: 2026-01-01T00:00:00Z
+---
+
+Reflectors must be mounted at a height of 150 to 2000 mm above floor level.
+The maximum spacing between reflectors is 8 metres.";
+
+        fs::write(dir.join("reflector-guide.md"), doc).unwrap();
+        dir
+    }
+
+    // Removes the temp directory after a test completes.
+    // Note: if a test panics before this is called, the directory is left on disk.
+    // The OS will eventually clean it up, or you can delete it manually from /tmp.
+    fn teardown(dir: &PathBuf) {
+        // Ignore the result — if removal fails we don't want to mask the test failure
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn search_finds_matching_document() {
+        let dir = setup_test_bundle();
+        // Point the server at the test bundle instead of the real knowledge/ directory.
+        // unsafe required in Rust 2024 edition — set_var modifies global process state.
+        unsafe { std::env::set_var("KUKA_KNOWLEDGE_DIR", &dir); }
+
+        let server = KukaServer::new();
+        let input = SearchInput { query: "reflector height".to_string() };
+        let result = server.search_docs(Parameters(input)).unwrap();
+
+        // Format the result as a debug string — the text content is embedded in it
+        let output = format!("{:?}", result);
+        assert!(output.contains("Reflector Guide"), "Should find the document by title");
+        assert!(output.contains("150"), "Should include excerpt containing the height value");
+
+        teardown(&dir);
+    }
+
+    #[test]
+    fn search_returns_no_results_for_unknown_query() {
+        let dir = setup_test_bundle();
+        std::env::set_var("KUKA_KNOWLEDGE_DIR", &dir);
+
+        let server = KukaServer::new();
+        let input = SearchInput { query: "hydraulic pump".to_string() };
+        let result = server.search_docs(Parameters(input)).unwrap();
+
+        let output = format!("{:?}", result);
+        assert!(output.contains("No results found"), "Unrelated query should return no results");
+
+        teardown(&dir);
+    }
+
+    #[test]
+    fn list_docs_shows_document_grouped_by_type() {
+        let dir = setup_test_bundle();
+        std::env::set_var("KUKA_KNOWLEDGE_DIR", &dir);
+
+        let server = KukaServer::new();
+        let result = server.list_docs().unwrap();
+
+        let output = format!("{:?}", result);
+        assert!(output.contains("Reflector Guide"), "Should list the document title");
+        assert!(output.contains("technical-note"), "Should group by type from frontmatter");
+
+        teardown(&dir);
+    }
+}</code></pre>
+
+  <h2>Step 2 — Run the integration tests</h2>
+
+  <p>
+    Run only the integration tests, single-threaded to prevent env var interference:
+  </p>
+
+  <pre><code>cargo test integration -- --test-threads=1</code></pre>
+
+  <p>
+    To run everything together (unit tests run in parallel, integration tests single-threaded
+    after them is not directly expressible in one command — the simplest approach is to run
+    all tests single-threaded when you need both):
+  </p>
+
+  <pre><code># Run all tests single-threaded
+cargo test -- --test-threads=1</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">What if teardown() is not called?</div>
+    <p>
+      If a test panics, <code>teardown()</code> is skipped — Rust has no
+      <code>finally</code> block. The temp directory is left at
+      <code>/tmp/kuka-integration-tests</code>. This is harmless (the OS cleans up
+      <code>/tmp</code> on reboot) but means a subsequent test run starts with leftover
+      files. The idiomatic fix is the <code>tempfile</code> crate, which provides a
+      <code>TempDir</code> type that deletes itself automatically via Rust's
+      <code>Drop</code> trait when it goes out of scope — the Rust equivalent of a
+      try-with-resources block. That is a future improvement.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/book/ch11-03-test-organization.html" target="_blank">
+        <strong>The Rust Book — Chapter 11.3: Test Organisation</strong>
+      </a><br>
+      Covers the distinction between unit tests (inline in the source file) and integration
+      tests (in a separate <code>tests/</code> directory). Also explains why
+      <code>use super::*</code> is needed in unit test modules but not in integration test
+      files.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "How does the tempfile crate's TempDir work and how would I use it here?",
+    "What is the Drop trait and how does it relate to Java's try-with-resources?",
+    or "How would I write an integration test in a separate tests/ directory instead?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0017-configurable-path.html">← Lesson 17: Configurable Knowledge Path</a>
+    <a href="0019-drop-and-tempdir.html">Lesson 19: Drop and TempDir →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "Why must integration tests that call std::env::set_var() run with --test-threads=1?",
+    options: [
+      "set_var() is marked unsafe and the compiler requires single-threaded mode to use it",
+      "cargo test defaults to running tests alphabetically, which breaks env var ordering",
+      "Environment variables are global process state — parallel tests setting different values interfere with each other",
+      "The test binary can only open one file at a time, so parallel filesystem tests would panic"
+    ],
+    correct: 2,
+    explanation: "std::env::set_var() modifies state shared across the entire process. If two tests run in parallel and both call set_var(\"KUKA_KNOWLEDGE_DIR\", ...) with different paths, one test will silently read the other's path, producing wrong results or failures. --test-threads=1 serialises execution so each test sees its own env var value."
+  },
+  {
+    question: "What happens to the temp directory if a test panics before teardown() is called?",
+    options: [
+      "Rust automatically cleans up any PathBuf values that go out of scope when a panic unwinds",
+      "The directory is left on disk — Rust has no finally block; the tempfile crate's TempDir solves this via Drop",
+      "cargo test detects the leftover directory on the next run and removes it automatically",
+      "The test is marked as failed but teardown() is still called via Rust's panic handler"
+    ],
+    correct: 1,
+    explanation: "Rust has no finally block. If a test panics, teardown() is not called and the temp directory remains. The idiomatic fix is the tempfile crate's TempDir, which implements the Drop trait — automatically deleting itself when it goes out of scope, even during a panic unwind. This is equivalent to Java's try-with-resources."
+  },
+  {
+    question: "What does std::fs::create_dir_all() do that std::fs::create_dir() does not?",
+    options: [
+      "It sets filesystem permissions on the new directory to allow all users to read it",
+      "It creates all missing intermediate directories and succeeds even if the directory already exists",
+      "It creates the directory and an empty .gitkeep file to make it visible in git status",
+      "It copies an existing directory structure rather than creating an empty new one"
+    ],
+    correct: 1,
+    explanation: "create_dir() fails if the parent directory does not exist or if the directory already exists. create_dir_all() behaves like mkdir -p — it creates any missing parents in the path and is a no-op if the directory already exists. This makes it safe to call in test setup without checking first."
+  },
+  {
+    question: "Why does the test use format!(\"{:?}\", result) rather than result.to_string()?",
+    options: [
+      "to_string() is not implemented for CallToolResult — only Debug formatting is available",
+      "format!(\"{:?}\") produces a longer string with more detail, making assertions more reliable",
+      "to_string() would panic on Ok variants; {:?} handles both Ok and Err safely",
+      "CallToolResult implements Display differently, omitting the text content from the output"
+    ],
+    correct: 0,
+    explanation: "CallToolResult does not implement the Display trait (used by to_string() and {}), but it does implement Debug (used by {:?}). The Debug output contains all field values including the embedded text content, which is what the assertions check. Using {:?} is the pragmatic approach when a type lacks a clean string conversion."
+  }
+]);
+</script>
+</body>
+</html>

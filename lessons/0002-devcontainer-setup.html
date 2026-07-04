@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 2: Dev Container Setup</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 2</div>
+    <h1>Dev Container Setup</h1>
+    <div class="lesson-meta">
+      <span>~20 minutes</span>
+      <span>Hands-on — you create the file</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're doing and why</h2>
+
+  <p>
+    Rather than installing Rust on Windows directly, you'll develop inside a
+    <strong>dev container</strong> — a Docker container that VS Code opens as your coding
+    environment. Rust, Cargo, and your editor extensions are all pre-installed inside it.
+    Your project files stay on your Windows machine and are mounted in, so nothing is lost
+    when the container stops.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Prerequisite</div>
+    You need <strong>Docker Desktop</strong> running on Windows and the
+    <strong>Dev Containers</strong> extension installed in VS Code
+    (<code>ms-vscode-remote.remote-containers</code>).
+    Check now: open a terminal and run <code>docker --version</code>.
+    If that works, you're ready.
+  </div>
+
+  <h2>The two things a devcontainer needs</h2>
+
+  <p>
+    A dev container is defined by a single JSON file:
+    <code>.devcontainer/devcontainer.json</code>. It needs two things:
+    <a href="https://containers.dev/implementors/json_reference/" target="_blank">[devcontainer.json reference]</a>
+  </p>
+
+  <h3>1. An image — what software is pre-installed</h3>
+  <p>
+    Microsoft publishes official dev container images. The one you want is:
+  </p>
+  <pre><code>"image": "mcr.microsoft.com/devcontainers/rust:latest"</code></pre>
+  <p>
+    This image comes with Rust, Cargo, <code>rustfmt</code>, and <code>clippy</code>
+    already installed. You don't touch any of that — it's just there.
+  </p>
+
+  <h3>2. Customizations — VS Code extensions and settings</h3>
+  <p>
+    You specify which VS Code extensions should be auto-installed when the container opens.
+    For Rust development you want three:
+  </p>
+  <ul>
+    <li><strong>rust-lang.rust-analyzer</strong> — autocomplete, type hints, inline errors. Essential.</li>
+    <li><strong>tamasfe.even-better-toml</strong> — syntax highlighting for <code>Cargo.toml</code>.</li>
+    <li><strong>serayuzgur.crates</strong> — shows latest crate versions inline in <code>Cargo.toml</code>.</li>
+  </ul>
+
+  <h2>Your turn: create the file</h2>
+
+  <p>
+    In VS Code, create the folder <code>.devcontainer</code> at the root of your project,
+    then create <code>devcontainer.json</code> inside it with this content:
+  </p>
+
+  <pre><code>{
+  "name": "KUKA MCP Server — Rust",
+  "image": "mcr.microsoft.com/devcontainers/rust:latest",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        }
+      }
+    }
+  },
+  "postCreateCommand": "rustc --version && cargo --version"
+}</code></pre>
+
+  <p>
+    The <code>postCreateCommand</code> runs once after the container is built — it prints
+    the Rust and Cargo versions so you can confirm everything installed correctly.
+  </p>
+
+  <h2>Open the project in the container</h2>
+
+  <p>Once the file is saved, reopen the project inside the container:</p>
+
+  <ol>
+    <li>Open the Command Palette: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd></li>
+    <li>Type <strong>Reopen in Container</strong> and press Enter</li>
+    <li>VS Code will pull the image and build the container — this takes a few minutes the first time</li>
+    <li>When it opens, you'll see <strong>Dev Container: KUKA MCP Server — Rust</strong> in the bottom-left corner</li>
+  </ol>
+
+  <div class="callout">
+    <div class="callout-label">Verify it worked</div>
+    Open a terminal in VS Code (<kbd>Ctrl</kbd>+<kbd>`</kbd>) and run:
+    <pre><code>rustc --version
+cargo --version</code></pre>
+    You should see version numbers for both. If you do, your Rust development environment
+    is fully set up.
+  </div>
+
+  <h2>What the container is and isn't</h2>
+
+  <div class="diagram">
+┌─────────────────────────────────────────────────────┐
+│  Your Windows machine                               │
+│                                                     │
+│  ┌─────────────────────────────────────────────┐   │
+│  │  Dev Container (Docker)                     │   │
+│  │                                             │   │
+│  │  Rust + Cargo + rust-analyzer               │   │
+│  │                                             │   │
+│  │  /workspaces/MCP-Rust  ◄── mounted from    │   │
+│  │  (your project files)      Windows disk    │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                     │
+│  Docker Desktop (runs the container)                │
+│  VS Code (connects to it via Remote extension)      │
+└─────────────────────────────────────────────────────┘
+  </div>
+
+  <p>
+    Your files live on Windows — the container just provides the tools. If you delete the
+    container, your code is safe. This also means you can commit <code>.devcontainer/</code>
+    to git and anyone else can open your project in the same environment.
+  </p>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source for this lesson</div>
+    <strong><a href="https://code.visualstudio.com/docs/devcontainers/containers" target="_blank">Developing inside a Container — VS Code Docs</a></strong><br>
+    Read the "Quick start" section. It walks through exactly what you just did, with screenshots.
+    Ten minutes.
+  </div>
+
+  <hr style="border: none; border-top: 1px solid #ddd; margin: 2.5rem 0;">
+
+  <h2>Check your understanding</h2>
+
+  <div class="quiz">
+    <div class="quiz-title">Recall practice — answer from memory</div>
+    <div id="quiz-1"></div>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Ask your teacher.</strong> Did Docker fail to pull the image? Is rust-analyzer
+    not activating? Did the container open but <code>rustc</code> isn't found? Paste the
+    error in the chat and we'll fix it before moving on.
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0001-what-is-mcp.html">← Lesson 1: What is MCP?</a>
+    <a href="0003-cargo-fundamentals.html">Lesson 3: Cargo Fundamentals →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz-1', [
+  {
+    question: "Where do your project files actually live when you're working in a dev container?",
+    options: [
+      "Inside the Docker container, copied from Windows",
+      "On your Windows machine, mounted into the container",
+      "In a Docker volume managed by VS Code",
+      "On a remote server connected via SSH"
+    ],
+    correct: 1,
+    explanation: "Your files stay on Windows and are mounted into the container. Deleting the container doesn't touch your code."
+  },
+  {
+    question: "What is the purpose of the postCreateCommand in devcontainer.json?",
+    options: [
+      "It runs every time you open a new terminal in the container",
+      "It installs VS Code extensions after the image is pulled",
+      "It runs once after the container is built for the first time",
+      "It configures the Docker image before it is pulled"
+    ],
+    correct: 2,
+    explanation: "postCreateCommand runs once after the container is first built — useful for verification steps or one-time setup."
+  },
+  {
+    question: "Why should you commit the .devcontainer folder to git?",
+    options: [
+      "Git requires it to track Docker images",
+      "It stores your Rust code in a compressed format",
+      "Anyone cloning the repo gets the same development environment",
+      "VS Code will not open the container without it being tracked"
+    ],
+    correct: 2,
+    explanation: "Committing .devcontainer means collaborators (or your future self on another machine) get an identical Rust environment just by opening the project."
+  }
+]);
+</script>
+</body>
+</html>

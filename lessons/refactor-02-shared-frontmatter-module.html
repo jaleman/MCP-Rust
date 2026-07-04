@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 2: One Frontmatter Module, Two Binaries</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 2</div>
+    <h1>One Frontmatter Module, Two Binaries</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 1 — commit <code>17967a8</code></span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The drift problem</h2>
+
+  <p>
+    The OKF frontmatter block is a <em>contract</em> between our two binaries:
+    <code>extract</code> writes it at the top of every markdown file, and the
+    server parses it back out for titles, types, and resource paths. Before this
+    step, the two halves of that contract lived in different files with no
+    connection to each other:
+  </p>
+
+  <pre><code>// extract.rs — the WRITER: a hand-built format! string
+let okf = format!(
+    "---
+type: technical-note
+title: {stem}
+description: Extracted from KUKA documentation.
+resource: kuka-docs/{filename}
+...
+---
+
+{body}", …);
+
+// main.rs — the PARSER: a hand-rolled line scanner
+fn extract_frontmatter_field(content: &amp;str, field: &amp;str) -&gt; Option&lt;String&gt; { … }</code></pre>
+
+  <p>
+    Rename a field in the writer, and the parser silently starts returning
+    <code>None</code>. No compiler error, no test failure — you'd discover it when
+    search results lose their titles. In Java terms: it's a producer and a consumer
+    exchanging JSON, where the producer builds the string with
+    <code>String.format()</code> and the consumer parses it with
+    <code>substring()</code> — instead of both sharing a Jackson-annotated DTO.
+  </p>
+
+  <h2>The fix: a shared type that both sides depend on</h2>
+
+  <p><strong>Rust — <code>src/frontmatter.rs</code> (new in this step):</strong></p>
+  <pre><code>/// The fields of an OKF frontmatter block, in the order they are written.
+pub struct OkfFrontmatter {
+    pub doc_type: String,
+    pub title: String,
+    pub description: String,
+    pub resource: String,
+    pub tags: String,       // rendered verbatim, e.g. "[extracted, technical-note]"
+    pub timestamp: String,
+}
+
+impl OkfFrontmatter {
+    /// Renders a complete OKF document: frontmatter block followed by the body.
+    pub fn render(&amp;self, body: &amp;str) -&gt; String {
+        format!(
+            "---\n\
+             type: {}\n\
+             title: {}\n\
+             ...
+             ---\n\n\
+             {}",
+            self.doc_type, self.title, /* … */ body,
+        )
+    }
+}
+
+// The parser moved into the SAME file:
+pub fn extract_frontmatter_field(content: &amp;str, field: &amp;str) -&gt; Option&lt;String&gt; { … }</code></pre>
+
+  <p><strong>The Java equivalent</strong> — a shared DTO in the core module:</p>
+  <pre><code>// core module — the single definition both apps depend on
+public record OkfFrontmatter(
+        String docType,
+        String title,
+        String description,
+        String resource,
+        String tags,
+        String timestamp) {
+
+    /** Renders frontmatter + body — the writer half of the contract. */
+    public String render(String body) {
+        return """
+               ---
+               type: %s
+               title: %s
+               ...
+               ---
+
+               %s""".formatted(docType, title, /* … */ body);
+    }
+
+    /** The parser half lives beside it, in the same class. */
+    public static Optional&lt;String&gt; extractField(String content, String field) { … }
+}</code></pre>
+
+  <p>
+    A Rust <code>struct</code> with an <code>impl</code> block is the moral
+    equivalent of that record: named fields, methods attached, no inheritance.
+    Note there are no getters — Rust fields marked <code>pub</code> are accessed
+    directly (<code>fm.title</code>), and immutability comes from the binding
+    (<code>let</code> vs <code>let mut</code>) rather than from the type.
+  </p>
+
+  <h2>The extractor after the change</h2>
+
+  <p>
+    <code>process_pdf</code> in <code>src/bin/extract.rs</code> now builds the
+    document through the shared type — compare with the raw <code>format!</code>
+    it replaced:
+  </p>
+
+  <pre><code>use mcp_server::frontmatter::OkfFrontmatter;
+
+let frontmatter = OkfFrontmatter {
+    doc_type: "technical-note".to_string(),
+    title: stem.to_string(),
+    description: "Extracted from KUKA documentation.".to_string(),
+    resource: format!("kuka-docs/{filename}"),
+    tags: "[extracted, technical-note]".to_string(),
+    timestamp: "2026-06-26T00:00:00Z".to_string(),  // real timestamp: planned fix
+};
+let okf = frontmatter.render(text.trim());</code></pre>
+
+  <p>
+    Java's closest syntax is a constructor call or builder; Rust's <em>struct
+    literal</em> names every field at the call site (like a builder, but built into
+    the language), and the compiler errors if any field is missing — there is no
+    "forgot to set a property" bug class.
+  </p>
+
+  <h2>The round-trip test: locking the contract</h2>
+
+  <p>
+    The real safety net is a new test in <code>frontmatter.rs</code>: whatever the
+    writer produces, the parser must read back unchanged. This is the same idea as
+    a JSON serialization round-trip test in Java
+    (<code>assertEquals(dto, mapper.readValue(mapper.writeValueAsString(dto), …))</code>):
+  </p>
+
+  <pre><code>#[test]
+fn render_and_parse_round_trip() {
+    let fm = OkfFrontmatter {
+        doc_type: "technical-note".to_string(),
+        title: "Reflector Guide".to_string(),
+        // … all six fields …
+    };
+    let doc = fm.render("Body text.");
+
+    assert_eq!(extract_frontmatter_field(&amp;doc, "title"),
+               Some("Reflector Guide".to_string()));
+    assert_eq!(extract_frontmatter_field(&amp;doc, "type"),
+               Some("technical-note".to_string()));
+    assert!(doc.ends_with("---\n\nBody text."));
+}</code></pre>
+
+  <p>
+    Now the failure mode changes from "silent drift discovered in production" to
+    "red test the moment either side changes." If we ever rename a frontmatter
+    field, this test fails immediately — in both binaries' shared code, before
+    either binary ships.
+  </p>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>record OkfFrontmatter(…)</code> / POJO + Lombok</td>
+        <td><code>pub struct OkfFrontmatter { … }</code></td>
+      </tr>
+      <tr>
+        <td>methods inside the class body</td>
+        <td>methods in a separate <code>impl OkfFrontmatter { … }</code> block</td>
+      </tr>
+      <tr>
+        <td><code>new OkfFrontmatter(a, b, c)</code> — positional</td>
+        <td><code>OkfFrontmatter { title: …, resource: … }</code> — every field named</td>
+      </tr>
+      <tr>
+        <td>text block <code>"""…"""</code> + <code>.formatted(…)</code></td>
+        <td><code>format!("…{}\n…", …)</code> with <code>\</code> line continuations</td>
+      </tr>
+      <tr>
+        <td><code>Optional&lt;String&gt;</code></td>
+        <td><code>Option&lt;String&gt;</code></td>
+      </tr>
+      <tr>
+        <td>Jackson round-trip test</td>
+        <td><code>render_and_parse_round_trip</code> test</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "Why does Rust separate data (struct) from behavior (impl)?",
+    "Could serde serialize this struct to YAML for us instead of hand-rolling render()?",
+    or "What happens if I add a field to the struct but forget it in render()?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-01-lib-and-bin-split.html">← Refactor Appendix 1: Library and Binaries</a>
+    <a href="0025-strip-headers-footers.html">← Back to Lesson 25</a>
+  </nav>
+
+</div>
+</body>
+</html>

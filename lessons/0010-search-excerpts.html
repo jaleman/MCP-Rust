@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 10: Search Excerpts</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 10</div>
+    <h1>Search Excerpts</h1>
+    <div class="lesson-meta">
+      <span>~20 minutes</span>
+      <span>Hands-on — edit, build, test in your dev container</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>What you're fixing</h2>
+
+  <p>
+    Right now, <code>search_docs</code> tells Claude <em>which documents</em> match a query.
+    Claude can't answer your question — it can only say "I found something in the Reflector
+    Deployment Guide." To answer correctly, Claude needs to actually read the relevant passage.
+  </p>
+
+  <p>
+    This lesson changes the tool to return a <strong>snippet of text around each match</strong>,
+    not just the title. After the change, asking "What are the reflector deployment requirements?"
+    will give Claude the actual specifications — and it will answer from them.
+  </p>
+
+  <div class="diagram">
+    Before: • Reflector Deployment Guide<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Source: kuka-docs/Reflector-Deployment-V1.0.1.pdf<br><br>
+    After:&nbsp; • Reflector Deployment Guide<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Source: kuka-docs/Reflector-Deployment-V1.0.1.pdf<br><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;...Reflectors must be mounted at a height of 150–2000 mm
+    and spaced no more than 8 m apart. Each reflector must have
+    a minimum surface area of 100 cm²...
+  </div>
+
+  <h2>New concepts — translated from Java</h2>
+
+  <h3>Concept 1: Option&lt;T&gt; — Rust's version of Optional&lt;T&gt;</h3>
+
+  <p>
+    In Java, <code>String.indexOf()</code> returns <code>-1</code> when the substring isn't found —
+    a sentinel value you have to remember to check. Miss the check and you pass <code>-1</code>
+    into <code>substring()</code> and get an exception at runtime.
+  </p>
+
+  <p>
+    Rust's <a href="https://doc.rust-lang.org/std/primitive.str.html#method.find" target="_blank"><code>str::find()</code></a>
+    returns <code>Option&lt;usize&gt;</code> — the same idea as Java's <code>Optional&lt;Integer&gt;</code>.
+    It is either <code>Some(42)</code> meaning "found at position 42", or <code>None</code> meaning "not found".
+    Rust forces you to unwrap it before you can use the value — you cannot accidentally pass <code>None</code>
+    into a slice operation.
+  </p>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>int pos = s.indexOf("reflector");<br>if (pos != -1) { ... }</code></td>
+        <td><code>if let Some(pos) = s.find("reflector") { ... }</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The <code>if let Some(pos)</code> syntax does two things at once: it checks whether the result
+    is <code>Some</code>, and if so, binds the inner value to <code>pos</code>. Think of it as
+    <code>if (optional.isPresent()) { int pos = optional.get(); }</code> — collapsed into one line.
+  </p>
+
+  <h3>Concept 2: usize — an integer that can never be negative</h3>
+
+  <p>
+    In Java, all integer types (<code>int</code>, <code>long</code>) are signed — they can hold
+    negative values. Rust has both signed integers (<code>i32</code>, <code>i64</code>) and
+    unsigned integers (<code>u32</code>, <code>u64</code>, <code>usize</code>).
+  </p>
+
+  <p>
+    <code>usize</code> is Rust's type for memory sizes and string positions. It is always
+    non-negative — it literally cannot store a value below zero. This makes it safe for
+    indexing, but it means subtraction can go wrong:
+  </p>
+
+  <pre><code>// Java: fine — int can hold -190
+int pos = 10;
+int start = pos - 200; // start = -190, Java doesn't complain
+
+// Rust: PANIC in debug mode — usize cannot hold -190
+let pos: usize = 10;
+let start = pos - 200; // integer overflow</code></pre>
+
+  <p>
+    The fix is <a href="https://doc.rust-lang.org/std/primitive.usize.html#method.saturating_sub" target="_blank"><code>saturating_sub(n)</code></a>,
+    which clamps the result to <code>0</code> instead of panicking. The Java equivalent is
+    <code>Math.max(0, pos - 200)</code>:
+  </p>
+
+  <pre><code>// Java equivalent:
+int start = Math.max(0, pos - 200);
+
+// Rust:
+let start = pos.saturating_sub(200);</code></pre>
+
+  <h3>Concept 3: .min() — same as Java's Math.min(), but as a method</h3>
+
+  <p>
+    Java uses a static utility method: <code>Math.min(a, b)</code>. Rust puts the same operation
+    directly on the number as a method: <code>a.min(b)</code>. They do exactly the same thing.
+  </p>
+
+  <pre><code>// Java:
+int end = Math.min(pos + 400, content.length());
+
+// Rust:
+let end = (pos + 400).min(content.len());</code></pre>
+
+  <p>
+    This caps <code>end</code> at the string length so you cannot accidentally slice past the end
+    of the document — which would panic at runtime, just like Java's <code>StringIndexOutOfBoundsException</code>.
+  </p>
+
+  <h3>Concept 4: content[start..end] — same as Java's substring(), different syntax</h3>
+
+  <p>
+    Java: <code>content.substring(start, end)</code><br>
+    Rust: <code>&amp;content[start..end]</code>
+  </p>
+
+  <p>
+    Both extract the characters from index <code>start</code> up to (but not including) <code>end</code>.
+    The <code>&amp;</code> at the front means "a reference to a slice of this string" — you're
+    reading a window into the original string rather than allocating a new copy. Don't worry
+    about the <code>&amp;</code> deeply yet; think of it as Rust's way of saying "I'm reading,
+    not copying."
+  </p>
+
+  <pre><code>// Java:
+String excerpt = content.substring(start, end).strip();
+
+// Rust:
+let excerpt = content[start..end].trim();</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Why search in lower but slice from content?</div>
+    <p>
+      <code>lower</code> is a lowercase copy of the document used for case-insensitive matching.
+      <code>find()</code> returns the byte position of the match within <code>lower</code>.
+      We then use that same position to slice from <code>content</code> (the original) so the
+      excerpt preserves the original capitalisation. This works because lowercasing ASCII characters
+      does not change their byte length — "A" and "a" both occupy exactly one byte — so the
+      positions are identical in both strings.
+    </p>
+  </div>
+
+  <h2>Step 1 — Update the inner loop</h2>
+
+  <p>
+    Open <code>mcp-server/src/main.rs</code>. Inside <code>search_docs</code>,
+    find the inner block that checks for a match and pushes a result. Replace it:
+  </p>
+
+  <p><strong>Before:</strong></p>
+
+  <pre><code>if let Ok(content) = std::fs::read_to_string(&amp;path) {
+    if content.to_lowercase().contains(&amp;query) {
+        let title =
+            extract_frontmatter_field(&amp;content, "title").unwrap_or_else(|| {
+                path.file_stem().unwrap().to_string_lossy().to_string()
+            });
+
+        let resource =
+            extract_frontmatter_field(&amp;content, "resource").unwrap_or_default();
+        results.push(format!("• {title}\n  Source: {resource}"))
+    }
+}</code></pre>
+
+  <p><strong>After:</strong></p>
+
+  <pre><code>if let Ok(content) = std::fs::read_to_string(&amp;path) {
+    let lower = content.to_lowercase();
+    if let Some(pos) = lower.find(&amp;query) {
+        let title =
+            extract_frontmatter_field(&amp;content, "title").unwrap_or_else(|| {
+                path.file_stem().unwrap().to_string_lossy().to_string()
+            });
+
+        let resource =
+            extract_frontmatter_field(&amp;content, "resource").unwrap_or_default();
+
+        let start = pos.saturating_sub(200);
+        let end = (pos + query.len() + 400).min(content.len());
+        let excerpt = content[start..end].trim();
+
+        results.push(format!(
+            "• {title}\n  Source: {resource}\n\n  ...{excerpt}..."
+        ));
+    }
+}</code></pre>
+
+  <h3>What changed and why</h3>
+
+  <ul>
+    <li>
+      <code>content.to_lowercase().contains(&amp;query)</code> has been split into two steps:
+      first create <code>lower</code>, then call <code>lower.find(&amp;query)</code>.
+      <code>find</code> gives you the position you need; <code>contains</code> does not.
+    </li>
+    <li>
+      The match arm is now <code>if let Some(pos)</code> instead of <code>if ...</code>. The
+      logic is the same — "only proceed on a match" — but you also bind <code>pos</code>.
+    </li>
+    <li>
+      Three new lines compute <code>start</code>, <code>end</code>, and <code>excerpt</code>
+      using the patterns you just learned.
+    </li>
+    <li>
+      The format string adds <code>\n\n  ...{excerpt}...</code> to each result entry.
+    </li>
+  </ul>
+
+  <h2>Step 2 — Build</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>
+    This should compile cleanly. If you see a borrow error on <code>excerpt</code>, check that
+    you wrote <code>content[start..end].trim()</code> (borrowed from <code>content</code>) and
+    not something that tries to own the string slice.
+  </p>
+
+  <h2>Step 3 — Test</h2>
+
+  <p>
+    Restart the MCP server, then ask your AI client a specific factual question whose answer is
+    in your knowledge bundle:
+  </p>
+
+  <pre><code>What height should reflectors be mounted at for KUKA AMR navigation?</code></pre>
+
+  <p>
+    You should see the tool return a result that includes the actual specification text, not
+    just the document name. Claude will then compose an answer from that text — grounded in
+    your PDFs.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">Tuning the window</div>
+    <p>
+      The <code>200</code> (lookback) and <code>400</code> (lookahead) numbers are a starting
+      point. If excerpts are too short to answer a question, increase them. If Claude's context
+      window fills up on long results, decrease them or cap the number of results returned.
+    </p>
+  </div>
+
+  <h2>Quick check</h2>
+
+  <div class="quiz" id="quiz"></div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <a href="https://doc.rust-lang.org/std/primitive.str.html#method.find" target="_blank">
+        <strong>str::find — Rust standard library docs</strong>
+      </a><br>
+      The reference for substring search in Rust. While you're there, look at
+      <code>rfind</code> (searches from the right) and <code>match_indices</code> (returns
+      all match positions) — both useful when you want to return multiple excerpts per document.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "How do I return more than one excerpt per document if the query appears multiple times?",
+    "How would I highlight the matched term inside the excerpt?",
+    or "How do I rank results so the closest match appears first?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0009-search-the-bundle.html">← Lesson 9: Search the Bundle</a>
+    <a href="0011-fuzzy-search.html">Lesson 11: Fuzzy Search →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz', [
+  {
+    question: "What does str::find() return when the substring is present in the string?",
+    options: [
+      "true — a boolean confirming the match",
+      "The matching substring as a &str",
+      "Some(usize) — the byte offset of the first match",
+      "The number of times the substring appears"
+    ],
+    correct: 2,
+    explanation: "find() returns Option<usize>: Some(pos) where pos is the byte offset of the first character of the match, or None if there is no match. This is what lets you build a window of text around the match."
+  },
+  {
+    question: "Why use pos.saturating_sub(200) instead of pos - 200?",
+    options: [
+      "saturating_sub is faster than - for usize values",
+      "pos - 200 would return a negative number when pos < 200",
+      "pos - 200 panics at runtime when pos < 200, since usize cannot go below 0",
+      "The - operator is not defined for usize in Rust's standard library"
+    ],
+    correct: 2,
+    explanation: "usize is an unsigned integer — it can't hold a negative value. Subtracting 200 from a usize smaller than 200 causes an integer overflow panic in debug mode. saturating_sub clamps the result to 0 instead."
+  },
+  {
+    question: "What would happen if you omitted .min(content.len()) when computing the end index?",
+    options: [
+      "The excerpt would always start from the beginning of the file",
+      "Rust would silently truncate the slice to fit within the string",
+      "The code would not compile — Rust checks slice bounds at compile time",
+      "The program would panic at runtime if the match is near the end of the document"
+    ],
+    correct: 3,
+    explanation: "Rust checks slice bounds at runtime, not compile time. If end > content.len(), indexing with [start..end] panics. .min(content.len()) ensures end never exceeds the string length."
+  }
+]);
+</script>
+</body>
+</html>

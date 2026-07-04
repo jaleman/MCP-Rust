@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 1: What is MCP?</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 1 of ?</div>
+    <h1>What is MCP?</h1>
+    <div class="lesson-meta">
+      <span>~15 minutes</span>
+      <span>Conceptual — no code yet</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The problem MCP solves</h2>
+
+  <p>
+    When you ask Claude a question, it can only answer from what it learned during training. It has
+    no way to open a file on your computer, query a database, or read a PDF you wrote yesterday.
+    Its knowledge is frozen at training time.
+  </p>
+
+  <p>
+    This is exactly the problem for your KUKA robot project. You have authoritative documentation
+    in PDF form. Claude doesn't. So we need a way to give Claude <em>live access</em> to those
+    documents at query time, not bake the information into a model.
+  </p>
+
+  <p>
+    <strong>MCP — the Model Context Protocol</strong> — is Anthropic's open standard for solving
+    this. It defines a structured way for an AI agent to talk to an external server that knows
+    things the AI doesn't.
+    <a href="https://modelcontextprotocol.io/docs" target="_blank">[MCP Docs]</a>
+  </p>
+
+  <h2>The architecture: client and server</h2>
+
+  <p>MCP uses a classic client–server model:</p>
+
+  <div class="diagram">
+┌─────────────────────┐         ┌──────────────────────────────┐
+│   MCP Client        │         │   MCP Server (your Rust app) │
+│                     │         │                              │
+│  Claude / Codex /   │◄───────►│  Reads KUKA PDFs             │
+│  any AI agent       │  stdio  │  Answers queries             │
+│                     │         │  Exposes Tools &amp; Resources   │
+└─────────────────────┘         └──────────────────────────────┘
+  </div>
+
+  <ul>
+    <li><strong>Client</strong>: the AI agent (Claude Desktop, Codex, etc.). It sends requests.</li>
+    <li><strong>Server</strong>: your Rust program. It responds with data from the KUKA PDFs.</li>
+    <li><strong>Transport</strong>: how they talk. For local use, this is <strong>stdio</strong> — the server runs as a subprocess, reading from stdin and writing to stdout.</li>
+  </ul>
+
+  <div class="callout">
+    <div class="callout-label">Key insight</div>
+    You are building the <strong>server</strong>. Claude is the client. Your job is to give
+    Claude a well-defined interface into the KUKA documentation so it can answer questions
+    accurately, citing the PDFs rather than guessing.
+  </div>
+
+  <h2>The three primitives</h2>
+
+  <p>
+    MCP servers expose three types of things to clients. Think of these as the vocabulary of
+    the protocol.
+    <a href="https://modelcontextprotocol.io/docs/develop/build-server" target="_blank">[MCP Build Guide]</a>
+  </p>
+
+  <h3>1. Resources — data the client can read</h3>
+  <p>
+    Resources are like files or records that the AI can fetch. They have a URI and content.
+    In your case, each KUKA PDF (or sections of it) could be a Resource:
+    <code>kuka://docs/KMR_iiwa_manual</code>.
+  </p>
+
+  <h3>2. Tools — functions the AI can call</h3>
+  <p>
+    Tools are the most powerful primitive. They are functions your server exposes that the AI
+    can invoke with arguments and get results back. Think of them like API endpoints.
+    Your server will have a tool like <code>search_kuka_docs(query: String)</code> —
+    Claude calls it, your Rust code searches the PDFs, and returns matching passages.
+  </p>
+
+  <h3>3. Prompts — reusable prompt templates</h3>
+  <p>
+    Prompts let the server expose structured prompt templates the AI can use. Useful but
+    optional for our project — we'll focus on Tools and Resources first.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">For your KUKA server</div>
+    <strong>Resources</strong>: the PDF documents themselves (metadata, full text sections)<br>
+    <strong>Tools</strong>: <code>search_kuka_docs</code>, <code>get_robot_specs</code>, <code>list_documents</code><br>
+    <strong>Prompts</strong>: optional — skip for now
+  </div>
+
+  <h2>The transport: stdio</h2>
+
+  <p>
+    MCP supports multiple transports, but for a local server the simplest is <strong>stdio</strong>:
+  </p>
+
+  <ul>
+    <li>Claude starts your Rust binary as a child process</li>
+    <li>It sends JSON-RPC messages to your server's <strong>stdin</strong></li>
+    <li>Your server replies to <strong>stdout</strong></li>
+    <li>Logs go to <strong>stderr</strong> (never to stdout — that would corrupt the messages)</li>
+  </ul>
+
+  <p>
+    This is important: <strong>never use <code>println!()</code> for debugging in your MCP server.</strong>
+    Always use <code>eprintln!()</code> or a logging library that writes to stderr.
+    <a href="https://paulyu.dev/article/rust-mcp-server-weather-tutorial/" target="_blank">[Weather Server Example]</a>
+  </p>
+
+  <h2>The protocol under the hood: JSON-RPC 2.0</h2>
+
+  <p>
+    MCP is built on <strong>JSON-RPC 2.0</strong> — a simple, language-agnostic protocol for
+    remote procedure calls over JSON. You don't need to implement this yourself; the
+    <code>rmcp</code> crate (the official Rust MCP SDK) handles it for you.
+    <a href="https://docs.rs/rmcp" target="_blank">[rmcp docs]</a>
+  </p>
+
+  <p>
+    What a raw message looks like (so you can recognise it in logs):
+  </p>
+
+  <pre><code>// Claude asks: "call the search_kuka_docs tool"
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "search_kuka_docs",
+    "arguments": { "query": "battery charging procedure KMR 200" }
+  }
+}</code></pre>
+
+  <pre><code>// Your server replies with the result
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [{ "type": "text", "text": "Section 4.3: Connect charger to..." }]
+  }
+}</code></pre>
+
+  <h2>How the full KUKA system will work</h2>
+
+  <p>Here is the complete picture of what you are building, end to end:</p>
+
+  <div class="diagram">
+KUKA PDFs → [Ingestion: Rust extracts text] → [In-memory index / search]
+                                                          │
+                                                          ▼
+                                               ┌─────────────────────┐
+                                               │  Rust MCP Server    │
+                                               │  (stdio transport)  │
+                                               │                     │
+                                               │  Tool: search_docs  │
+                                               │  Resource: list_docs│
+                                               └─────────┬───────────┘
+                                                         │ JSON-RPC / stdio
+                                                         ▼
+                                               Claude / AI Agent
+                                               "What is the max payload
+                                               of the KMR iiwa?"
+  </div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source for this lesson</div>
+    <strong><a href="https://modelcontextprotocol.io/docs" target="_blank">Model Context Protocol — Official Documentation</a></strong><br>
+    Read the "Introduction" and "Core architecture" sections. They are short (10 minutes) and
+    will give you the mental model in Anthropic's own words. Everything in this lesson maps
+    directly to what you'll find there.
+  </div>
+
+  <hr style="border: none; border-top: 1px solid #ddd; margin: 2.5rem 0;">
+
+  <h2>Check your understanding</h2>
+
+  <div class="quiz">
+    <div class="quiz-title">Recall practice — answer from memory</div>
+    <div id="quiz-1"></div>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Ask your teacher.</strong> Anything unclear about MCP's architecture, the three
+    primitives, or how stdio transport works? Type your question in the chat. Your teacher
+    can go deeper on any of this before we write code in Lesson 2.
+  </div>
+
+  <nav class="lesson-nav">
+    <span>← Start</span>
+    <a href="0002-devcontainer-setup.html">Lesson 2: Dev Container Setup →</a>
+  </nav>
+
+</div>
+
+<script src="../assets/quiz.js"></script>
+<script>
+initQuiz('quiz-1', [
+  {
+    question: "What are the three primitives that an MCP server can expose to clients?",
+    options: [
+      "Tools, Resources, Prompts",
+      "Routes, Models, Controllers",
+      "Handlers, Schemas, Streams",
+      "Functions, Files, Templates"
+    ],
+    correct: 0,
+    explanation: "Correct! Tools (callable functions), Resources (readable data), and Prompts (reusable templates) are the three MCP primitives."
+  },
+  {
+    question: "For your local KUKA server, which transport will you use?",
+    options: [
+      "HTTP with Server-Sent Events",
+      "WebSockets over TLS",
+      "stdio (stdin / stdout)",
+      "gRPC over TCP"
+    ],
+    correct: 2,
+    explanation: "Correct! stdio is the simplest local transport — Claude starts your binary as a subprocess and communicates via stdin/stdout."
+  },
+  {
+    question: "A tool called search_kuka_docs would be which MCP primitive?",
+    options: [
+      "A Resource — because it reads PDF data",
+      "A Prompt — because it generates text",
+      "A Tool — because it is a callable function",
+      "A Transport — because it moves data"
+    ],
+    correct: 2,
+    explanation: "Correct! Tools are functions the AI can call with arguments. search_kuka_docs takes a query and returns results — that's a Tool."
+  },
+  {
+    question: "Why must you never use println!() for debug output in your MCP server?",
+    options: [
+      "println! is too slow for server use",
+      "Rust macros cannot run in server context",
+      "stdout carries JSON-RPC messages; printing corrupts them",
+      "Claude blocks all stdout from child processes"
+    ],
+    correct: 2,
+    explanation: "Correct! stdout is the JSON-RPC message channel. Any extra bytes you write there will corrupt the protocol. Always log to stderr."
+  },
+  {
+    question: "In the MCP client-server model, what role does YOUR Rust program play?",
+    options: [
+      "The client — it sends queries to Claude",
+      "The transport — it routes messages between processes",
+      "The server — it responds to Claude's requests",
+      "The protocol — it defines the message format"
+    ],
+    correct: 2,
+    explanation: "Correct! Claude is the client; your Rust program is the server. You expose tools and resources; Claude calls them."
+  }
+]);
+</script>
+</body>
+</html>

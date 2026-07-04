@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Appendix 4: Ownership vs Reference — When to Use Each</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Appendix 4</div>
+    <h1>Ownership vs Reference</h1>
+    <div class="lesson-meta">
+      <span>Reference — return to this when the compiler says "expected String, found &amp;String"</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The question</h2>
+
+  <p>
+    When calling a function or method, how do you know whether to pass an owned value
+    (<code>my_string</code>) or a reference (<code>&amp;my_string</code>)?
+  </p>
+
+  <p>
+    The answer comes from two places: the function's signature tells you what it expects,
+    and the <em>intent</em> of the function tells you why. Once you understand the intent,
+    you rarely need to check the signature.
+  </p>
+
+  <h2>The signature is the contract</h2>
+
+  <p>
+    Every Rust function declares exactly what it expects in its parameter types. If the
+    parameter is <code>K</code> it wants ownership. If it is <code>&amp;K</code> it wants
+    a reference. The compiler enforces this — you cannot accidentally pass the wrong thing.
+  </p>
+
+  <pre><code>// Takes ownership — the function may store or drop the value
+pub fn entry(&amp;mut self, key: K) -> Entry&lt;K, V&gt;
+
+// Takes a reference — the function only reads, never stores
+pub fn get(&amp;self, key: &amp;K) -> Option&lt;&amp;V&gt;
+
+// Takes a mutable reference — the function modifies in place but gives it back
+pub fn sort_by&lt;F&gt;(&amp;mut self, compare: F)</code></pre>
+
+  <h2>The rule of thumb</h2>
+
+  <table class="comparison-table">
+    <thead>
+      <tr>
+        <th>What the function does with the value</th>
+        <th>Parameter type</th>
+        <th>You pass</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Stores it permanently (e.g. as a map key)</td>
+        <td><code>K</code> — owned</td>
+        <td><code>my_string</code></td>
+      </tr>
+      <tr>
+        <td>Reads or looks up, then forgets it</td>
+        <td><code>&amp;K</code> — shared reference</td>
+        <td><code>&amp;my_string</code></td>
+      </tr>
+      <tr>
+        <td>Modifies in place, then returns control</td>
+        <td><code>&amp;mut K</code> — mutable reference</td>
+        <td><code>&amp;mut my_string</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Worked examples from this project</h2>
+
+  <h3>HashMap::entry() — takes ownership</h3>
+
+  <pre><code>grouped.entry(doc_type).or_insert_with(Vec::new).push(title);</code></pre>
+
+  <p>
+    <code>entry()</code> takes <code>doc_type: String</code> by value (ownership) because
+    it might need to store the key inside the map. If the key is absent, the HashMap keeps
+    it. If it is already present, the HashMap drops it. Either way, the function needs to
+    own it to make that decision.
+  </p>
+
+  <h3>HashMap::get() — takes a reference</h3>
+
+  <pre><code>grouped.get(&amp;doc_type)</code></pre>
+
+  <p>
+    <code>get()</code> only looks up — it never stores anything. A reference is enough. The
+    map does not need to own the key to check whether it exists.
+  </p>
+
+  <h3>HashMap::remove() — takes a reference</h3>
+
+  <pre><code>grouped.remove(&amp;doc_type)</code></pre>
+
+  <p>
+    <code>remove()</code> also takes a reference, even though it deletes the entry. The key
+    you pass is just used to find the entry — the map then removes its own copy of the key.
+    You keep your <code>doc_type</code> after the call.
+  </p>
+
+  <h3>fuzzy_word_match() — takes references</h3>
+
+  <pre><code>fn fuzzy_word_match(doc_lower: &amp;str, term: &amp;str) -> bool</code></pre>
+
+  <p>
+    Both parameters are <code>&amp;str</code> because the function only reads the strings
+    and returns a bool. It has no reason to own or store them.
+  </p>
+
+  <h2>What the compiler tells you</h2>
+
+  <p>
+    If you pass the wrong thing, the compiler error is usually clear:
+  </p>
+
+  <pre><code>// You wrote:
+grouped.entry(&amp;doc_type)   // passed a reference
+
+// Compiler says:
+// expected `String`, found `&amp;String`
+// help: consider removing the `&amp;`</code></pre>
+
+  <p>
+    Early in your Rust career, read these errors as the API teaching you its ownership
+    requirement. Over time the patterns become familiar and you stop needing to check.
+  </p>
+
+  <h2>Java comparison</h2>
+
+  <p>
+    In Java, every object is already a reference — you never choose between passing by
+    value and passing by reference for objects. Primitives (<code>int</code>,
+    <code>boolean</code>) are passed by value; objects (<code>String</code>,
+    <code>List</code>) are always passed as references. You never have to think about it.
+  </p>
+
+  <p>
+    Rust makes this distinction explicit for every type, including strings and collections.
+    The upside is that you always know from the signature whether a function can store,
+    modify, or only read what you give it — which is information Java's signatures do not
+    convey.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">When in doubt, try &amp; first</div>
+    <p>
+      References are the safer default — a function that takes <code>&amp;String</code>
+      cannot store or destroy your value. If the compiler tells you it needs ownership,
+      remove the <code>&amp;</code>. Starting with a reference and being corrected is
+      lower-risk than accidentally giving ownership to a function you didn't intend to.
+    </p>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "What happens to a value after I give ownership to a function?",
+    "When would I need to clone a value instead of passing ownership?",
+    or "What is the difference between &amp;String and &amp;str — when do I use each?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="appendix-03-sorting.html">← Appendix 3: Sorting</a>
+    <a href="0014-list-documents.html">← Back to Lesson 14</a>
+  </nav>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lesson 24 — MCP Resources: Expose Docs by URI</title>
+  <link rel="stylesheet" href="../assets/style.css">
+  <script src="../assets/quiz.js"></script>
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Lesson 24</div>
+    <h1>MCP Resources: Expose Docs by URI</h1>
+    <div class="lesson-meta">
+      <span>~25 min</span>
+      <span>Topic: ServerHandler resources</span>
+      <span>Prerequisite: <a href="0023-pdftotext-fallback.html">Lesson 23</a></span>
+    </div>
+  </header>
+
+  <p>
+    Your server already has three tools — <code>ping</code>, <code>list_docs</code>, and
+    <code>search_docs</code>. Tools are great for actions: Claude calls them with parameters
+    and gets back results. But MCP has a second primitive called <strong>Resources</strong>.
+  </p>
+  <p>
+    A Resource is a piece of data with a <em>URI</em>. Claude can browse a catalogue of resources
+    and fetch any one by its address — no parameters, no invocation logic. After this lesson,
+    every OKF document in the knowledge bundle will be browseable by Claude at a URI like
+    <code>kuka://docs/reflector-guide</code>.
+  </p>
+
+  <h2>Tools vs. Resources — the REST analogy</h2>
+
+  <p>If you think in REST terms, the mapping is immediate:</p>
+
+  <table class="comparison-table">
+    <thead>
+      <tr><th>MCP concept</th><th>REST analogy</th><th>What Claude does</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Tool</td>
+        <td>POST endpoint</td>
+        <td>Calls it with parameters to trigger work</td>
+      </tr>
+      <tr>
+        <td>Resource</td>
+        <td>GET endpoint</td>
+        <td>Browses a list, then fetches one by URI</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    When Claude receives a question about KUKA docs, it can now <em>browse</em> the resource list
+    to see what documents exist, then <em>read</em> a specific document in full — without you
+    having to write a "read a document" tool at all.
+  </p>
+
+  <h2>The URI scheme</h2>
+
+  <p>
+    MCP URIs look like URLs, but you invent the scheme. We'll use:
+  </p>
+
+  <div class="diagram">
+    kuka://docs/<em>stem</em><br>
+    <span style="font-size:0.8em; color:#888">↑ custom scheme &nbsp;&nbsp;&nbsp;&nbsp; ↑ filename without .md</span>
+  </div>
+
+  <p>
+    So <code>knowledge/reflector-guide.md</code> maps to
+    <code>kuka://docs/reflector-guide</code>. The stem is exactly what
+    <code>path.file_stem()</code> already returns in the existing code.
+  </p>
+
+  <h2>What we're adding</h2>
+
+  <p>Three small changes to <code>src/main.rs</code>:</p>
+
+  <ol>
+    <li>One line in <code>get_info()</code> to advertise resource support</li>
+    <li>Two new imports to the <code>use rmcp::{ … }</code> block</li>
+    <li>Two new methods in the <code>#[tool_handler] impl ServerHandler for KukaServer</code> block</li>
+  </ol>
+
+  <h2>Step 1 — Advertise resource support</h2>
+
+  <p>
+    Claude won't request a resource list unless the server declares it supports resources.
+    Add <code>.enable_resources()</code> to the capabilities builder inside <code>get_info()</code>:
+  </p>
+
+  <pre><code>fn get_info(&self) -&gt; ServerInfo {
+    ServerInfo::new(
+        ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()    // ← ADD
+            .build(),
+    )
+    .with_instructions(
+        "KUKA AMR robot knowledge server. \
+         Use the ping tool to confirm the server is alive."
+            .to_string(),
+    )
+}</code></pre>
+
+  <h2>Step 2 — Add imports</h2>
+
+  <p>
+    The resource handler methods use two types not yet in scope.
+    Add them to the existing <code>use rmcp::{ … }</code> block:
+  </p>
+
+  <pre><code>use rmcp::{
+    ErrorData as McpError,
+    RoleServer,                     // ← ADD
+    ServerHandler,
+    ServiceExt,
+    handler::server::router::tool::ToolRouter,
+    handler::server::wrapper::Parameters,
+    model::*,
+    schemars,
+    serde,
+    service::RequestContext,        // ← ADD
+    tool,
+    tool_handler,
+    tool_router,
+    transport::stdio,
+};</code></pre>
+
+  <p>
+    <code>RequestContext&lt;RoleServer&gt;</code> is the per-request context object — analogous
+    to <code>HttpServletRequest</code> in Java EE. Every async handler receives one so it can
+    cancel in-flight work or send progress notifications. We won't use it in these handlers, but
+    the trait signature requires it.
+  </p>
+
+  <h2>Step 3 — Implement <code>list_resources</code></h2>
+
+  <p>
+    Add this method inside the
+    <code>#[tool_handler] impl ServerHandler for KukaServer</code> block, alongside
+    <code>get_info</code>:
+  </p>
+
+  <pre><code>async fn list_resources(
+    &amp;self,
+    _request: Option&lt;PaginatedRequestParams&gt;,
+    _context: RequestContext&lt;RoleServer&gt;,
+) -&gt; Result&lt;ListResourcesResult, McpError&gt; {
+    let knowledge_dir = knowledge_dir();
+    let mut resources: Vec&lt;Resource&gt; = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(&amp;knowledge_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            if let Ok(content) = std::fs::read_to_string(&amp;path) {
+                let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+                let title = extract_frontmatter_field(&amp;content, "title")
+                    .unwrap_or_else(|| stem.clone());
+                let description = extract_frontmatter_field(&amp;content, "description");
+                let uri = format!("kuka://docs/{stem}");
+
+                let mut raw = RawResource::new(uri, stem)
+                    .with_title(title)
+                    .with_mime_type("text/markdown".to_string());
+                if let Some(desc) = description {
+                    raw = raw.with_description(desc);
+                }
+                resources.push(Annotated::new(raw, None));
+            }
+        }
+    }
+
+    Ok(ListResourcesResult::with_all_items(resources))
+}</code></pre>
+
+  <h3>What's happening here</h3>
+
+  <p>
+    <code>Resource</code> is a type alias for <code>Annotated&lt;RawResource&gt;</code>.
+    The <code>Annotated</code> wrapper holds optional audience/priority metadata — we pass
+    <code>None</code> because we don't need it. <code>RawResource::new(uri, name)</code>
+    takes the URI and a slug (the file stem), then builder methods add the human-readable
+    title and MIME type.
+  </p>
+
+  <table class="comparison-table">
+    <thead>
+      <tr><th>RawResource field</th><th>What it holds</th><th>Example</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><code>uri</code></td>
+        <td>The stable address Claude uses to fetch this resource</td>
+        <td><code>kuka://docs/reflector-guide</code></td>
+      </tr>
+      <tr>
+        <td><code>name</code> (the slug)</td>
+        <td>Machine-readable identifier</td>
+        <td><code>reflector-guide</code></td>
+      </tr>
+      <tr>
+        <td><code>title</code></td>
+        <td>Human-readable display name (optional)</td>
+        <td><code>Reflector Deployment Guide</code></td>
+      </tr>
+      <tr>
+        <td><code>description</code></td>
+        <td>Short summary shown in the resource list (optional)</td>
+        <td>From the OKF frontmatter</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    The <code>_request</code> parameter carries a pagination cursor — useful when you have
+    thousands of resources. Our knowledge bundle is small, so we ignore it and return
+    everything in one call.
+  </p>
+
+  <h2>Step 4 — Implement <code>read_resource</code></h2>
+
+  <p>Add this second method to the same impl block:</p>
+
+  <pre><code>async fn read_resource(
+    &amp;self,
+    request: ReadResourceRequestParams,
+    _context: RequestContext&lt;RoleServer&gt;,
+) -&gt; Result&lt;ReadResourceResult, McpError&gt; {
+    let uri = &amp;request.uri;
+
+    // Strip the kuka://docs/ prefix to recover the file stem
+    let stem = uri.strip_prefix("kuka://docs/").ok_or_else(|| McpError {
+        code: ErrorCode::RESOURCE_NOT_FOUND,
+        message: format!("Unknown resource URI: {uri}").into(),
+        data: None,
+    })?;
+
+    let path = knowledge_dir().join(format!("{stem}.md"));
+    let content = std::fs::read_to_string(&amp;path).map_err(|_| McpError {
+        code: ErrorCode::RESOURCE_NOT_FOUND,
+        message: format!("Resource not found: {uri}").into(),
+        data: None,
+    })?;
+
+    Ok(ReadResourceResult::new(vec![
+        ResourceContents::text(content, uri.clone())
+    ]))
+}</code></pre>
+
+  <div class="callout">
+    <div class="callout-label">Note: argument order</div>
+    <p>
+      <code>ResourceContents::text(text, uri)</code> — text content <em>first</em>,
+      URI <em>second</em>. This is opposite to what you might expect. The compiler will
+      catch it if you swap them (the types are both <code>String</code>, so it won't
+      complain — but the emitted JSON will have the fields transposed, which breaks Claude).
+      Double-check the order.
+    </p>
+  </div>
+
+  <p>
+    <code>ErrorCode::RESOURCE_NOT_FOUND</code> is MCP error code <code>−32002</code> — the
+    standard signal for "I don't have a resource at that URI." It lives in
+    <code>rmcp::model::*</code>, so no extra import is needed.
+  </p>
+
+  <p>
+    The <code>McpError { code, message, data }</code> struct literal works here because
+    <code>ErrorData</code> is a plain public struct — no constructor required.
+    <code>format!("…").into()</code> converts the <code>String</code> into the
+    <code>Cow&lt;'static, str&gt;</code> that the <code>message</code> field expects.
+  </p>
+
+  <h2>Step 5 — Build and test</h2>
+
+  <pre><code>cargo build</code></pre>
+
+  <p>Restart the Claude Desktop MCP server, then try:</p>
+
+  <ul>
+    <li><em>"What documents are available in the KUKA knowledge base?"</em> — Claude will
+    call <code>resources/list</code> and present the catalogue.</li>
+    <li><em>"Can you read the full reflector guide?"</em> — Claude will call
+    <code>resources/read</code> with the URI it got from the list.</li>
+  </ul>
+
+  <p>
+    You don't need to do anything else — the MCP protocol handles the round-trip automatically.
+    Claude receives the list, picks the right URI, and fetches the content, all within a single
+    conversation turn.
+  </p>
+
+  <div class="callout">
+    <div class="callout-label">If Claude ignores the resource list</div>
+    <p>
+      Some Claude Desktop builds default to tool-use and only fall back to resources when
+      prompted. Try: <em>"List available resources from the KUKA server"</em> or
+      <em>"Use the KUKA resource list to find…"</em> to trigger the resources/list call
+      explicitly.
+    </p>
+  </div>
+
+  <div class="primary-source">
+    <div class="primary-source-label">Primary source</div>
+    <p>
+      <strong>
+        <a href="https://modelcontextprotocol.io/docs/concepts/resources" target="_blank">
+          MCP Specification — Resources
+        </a>
+      </strong><br>
+      The canonical reference for the <code>resources/list</code> and
+      <code>resources/read</code> protocol methods, URI format rules, MIME types,
+      and subscription (live-update) support. Worth a read once this lesson compiles.
+    </p>
+  </div>
+
+  <div class="quiz" id="quiz-l24">
+    <div class="quiz-title">Quiz — answer from memory before checking</div>
+  </div>
+
+  <div class="ask-teacher">
+    <strong>Ask your teacher.</strong> Good follow-up questions: "What's the difference between
+    the <code>name</code> slug and the <code>title</code> in <code>RawResource</code>?",
+    "Why does <code>list_resources</code> take <code>Option&lt;PaginatedRequestParams&gt;</code>?",
+    "When would I use resource subscriptions?", or "How would I add a resource template
+    so Claude can construct URIs for documents it hasn't listed yet?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="0023-pdftotext-fallback.html">← Lesson 23: External Commands</a>
+    <a href="0025-strip-headers-footers.html">Lesson 25: Stripping Headers &amp; Footers →</a>
+  </nav>
+
+</div>
+
+<script>
+initQuiz("quiz-l24", [
+  {
+    question: "What is the fundamental difference between an MCP Tool and an MCP Resource?",
+    options: [
+      "Tools are invoked with parameters; Resources are fetched by URI",
+      "Tools run server-side code; Resources run client-side code",
+      "Tools are asynchronous; Resources are always synchronous",
+      "Tools return text; Resources always return binary blobs"
+    ],
+    correct: 0,
+    explanation: "Correct. Tools = actions you trigger (POST analogy). Resources = data you address (GET analogy). The client browses a resource list and reads documents by their stable URIs."
+  },
+  {
+    question: "Which builder method on ServerCapabilities enables resources/list and resources/read?",
+    options: [
+      ".enable_resources()",
+      ".with_resources(true)",
+      ".set_resources_enabled()",
+      ".add_resource_support()"
+    ],
+    correct: 0,
+    explanation: "Correct. .enable_resources() is the builder method, mirroring .enable_tools(). Without it, Claude never sends resources/list even if you implement the handler."
+  },
+  {
+    question: "In read_resource, what do you return when the URI doesn't match any document?",
+    options: [
+      "Err with ErrorCode::RESOURCE_NOT_FOUND (−32002)",
+      "Ok with an empty ReadResourceResult",
+      "Err with ErrorCode::INVALID_PARAMS (−32602)",
+      "Ok with a plain-text 'not found' message"
+    ],
+    correct: 0,
+    explanation: "Correct. ErrorCode::RESOURCE_NOT_FOUND (−32002) is the MCP-standard error for an unknown resource URI. Returning Ok with empty content would mislead Claude into thinking it got a valid (empty) document."
+  },
+  {
+    question: "ResourceContents::text() takes two arguments — in what order?",
+    options: [
+      "Text content first, URI second",
+      "URI first, text content second",
+      "URI first, MIME type second, text content third",
+      "Text content first, MIME type second, URI third"
+    ],
+    correct: 0,
+    explanation: "Correct. ResourceContents::text(content, uri) — content comes first. The argument order is easy to swap since both are strings; the compiler won't catch it, but the resulting JSON will be malformed."
+  }
+]);
+</script>
+
+</body>
+</html>
