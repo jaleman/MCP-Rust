@@ -308,3 +308,13 @@ Newest entry last. Every status change in the dashboard gets a line here.
   knowledge/emergencyfirealarm.md (task chip raised). Next action: ask
   user for permission to start step 4 (config into KukaServer) on
   branch refactor/step-4-server-config.
+- 2026-07-04 — LINE ENDINGS SETTLED (PR #3, merged 33ea4cb). The tree is
+  shared between Windows host (was autocrlf=true) and the Linux
+  devcontainer, which made container git show phantom "modified" files.
+  Fixed: .gitattributes pins `* text=auto eol=lf`; host repo config now
+  autocrlf=false; all tracked files physically LF on disk; both sides
+  report clean; 27/27 tests pass. NOTE for future agents: if phantom
+  modified files reappear with an empty `git diff`, it is the index stat
+  cache — `git restore .` clears it. Prefer running git from the host;
+  avoid git commands as root inside the container (they can wedge the
+  shared .git/index ownership/stat data).
