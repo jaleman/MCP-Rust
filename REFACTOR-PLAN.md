@@ -33,6 +33,17 @@ cargo is not installed on the Windows host.
 > comparison-table usage). Cross-link related lessons and learning-records.
 > So the full completion criteria are: tests pass in devcontainer → committed
 > → refactor lessons written → dashboard flipped to `complete` + log entry.
+>
+> **Git workflow (since 2026-07-04): pull-request per step.** The repo root is
+> `D:\projects\Learning\MCP-Rust` with remote `jaleman/MCP-Rust` on GitHub
+> (the old nested mcp-server repo was promoted to the root in 06a1b02; its
+> history is preserved). For each step: create a branch
+> `refactor/step-N-<short-name>` off master, commit the code AND its refactor
+> lessons AND the plan/dashboard updates on that branch, push, and open a PR
+> with `gh pr create`. The USER reviews and merges the PR — do not merge it
+> yourself. A step is `complete` when its PR is merged. Always push; nothing
+> stays local-only. Trivial bookkeeping-only edits (progress-log lines,
+> workflow notes) may be committed directly to master and pushed.
 
 | Step | Description | Status | Notes |
 |------|-------------|--------|-------|
