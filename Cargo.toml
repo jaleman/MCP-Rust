@@ -1,0 +1,25 @@
+[package]
+name = "mcp-server"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "mcp-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "extract"
+path = "src/extract.rs"
+
+[dependencies]
+anyhow = "1.0.103"
+clap = { version = "4.6.1", features = ["derive"] }
+pdf-extract = "0.12.0"
+rmcp = { version = "1.8.0", features = ["macros", "transport-io"] }
+schemars = "1.2.1"
+serde = { version = "1.0.228", features = ["derive"] }
+strsim = "0.11.1"
+tempfile = "3.27.0"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
