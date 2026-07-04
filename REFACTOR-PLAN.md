@@ -51,7 +51,7 @@ cargo is not installed on the Windows host.
 | 2 | Document + load_bundle, error/traversal/extension fixes | complete | PR #1 merged (948a356); lessons refactor-03, refactor-04 |
 | 3 | SearchHit API, consts, LazyLock stop words, test rewrite | complete | PR #2 merged (1ace0b2); lessons refactor-05, refactor-06 |
 | 4 | config into KukaServer | complete | PR #4 merged (e221860); lesson refactor-07 |
-| 5a | chunking in extract | not started | |
+| 5a | chunking in extract | in progress | implemented (a79e531) + lesson refactor-08; PR open, awaiting user merge |
 | 5b | inverted index, seek excerpts, reload_docs | not started | |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
 
@@ -336,3 +336,19 @@ Newest entry last. Every status change in the dashboard gets a line here.
   user for permission to start step 5a (page-boundary chunking in
   extract, ~8 KB target, one file per chunk with parent/pages
   frontmatter).
+- 2026-07-04 — STEP 5A implemented on branch refactor/step-5a-chunking
+  (commit a79e531). New lib module chunk.rs (chunk_pages: form-feed page
+  split, ~8 KB accumulation, paragraph sub-split for oversized pages,
+  empty pages skipped w/ numbering kept). extract.rs writes one OKF file
+  per chunk with parent/pages frontmatter; OkfFrontmatter gained
+  Option<String> parent/pages; jiff for real timestamps; bails on empty
+  extraction; within-run collision warning; case-insensitive .pdf.
+  36/36 tests, clippy clean. REAL BUNDLE REBUILT (knowledge/ is
+  gitignored — derived data): 9/10 PDFs extracted, MQTT Configuration →
+  2 chunks, MQTT Payload Definitions → 3 chunks; live search shows
+  page-provenance titles. EmergencyFireAlarm.pdf is IMAGE-ONLY (both
+  extractors yield nothing) — extractor now refuses it loudly; stale
+  empty knowledge/emergencyfirealarm.md deleted; fixing that doc = OCR,
+  out of scope. Lesson refactor-08-page-chunking written. PR opened;
+  step complete when user merges. Next after merge: ask permission for
+  step 5b (inverted index) on branch refactor/step-5b-inverted-index.

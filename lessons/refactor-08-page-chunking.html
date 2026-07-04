@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 8: Chunking Documents on Page Boundaries</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 8</div>
+    <h1>Chunking Documents on Page Boundaries</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 5a — commit <code>a79e531</code></span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>Why chunk at all</h2>
+
+  <p>
+    Three consumers of this server all want document units of a few kilobytes,
+    never a 300-page manual: search excerpts (anchored in a small file, always
+    relevant), MCP resources (<code>read_resource</code> returns a whole file — a
+    gigabyte resource would break any client), and the AI agent's context window
+    (an agent can read several 8 KB hits; it cannot read a manual). Chunking at
+    <em>extract time</em> solves all three at once — and improves the results:
+    "MQTT Payload Definitions (pages 9–16)" tells the reader where to look in the
+    real PDF.
+  </p>
+
+  <p>
+    The boundary comes free: <code>pdftotext</code> separates pages with a form-feed
+    character (<code>\x0c</code>, the ASCII "new page" control code from the
+    typewriter era). Split on it, and you have page-accurate sections with no
+    parsing.
+  </p>
+
+  <h2>The accumulator pattern</h2>
+
+  <p>
+    The core of <code>chunk.rs</code> is a pattern you've written many times in
+    Java: iterate, accumulate into a buffer, flush when full.
+  </p>
+
+  <p><strong>Rust:</strong></p>
+  <pre><code>let mut chunks: Vec&lt;Chunk&gt; = Vec::new();
+let mut cur_text = String::new();
+let mut cur_first = 0;
+let mut cur_last = 0;
+
+for (i, raw_page) in text.split('\x0c').enumerate() {
+    let page_no = i + 1;
+    let page = raw_page.trim();
+    if page.is_empty() { continue; }        // blank page: skip, numbering kept
+
+    // Would this page overflow the open chunk? Flush it first.
+    if !cur_text.is_empty() &amp;&amp; cur_text.len() + 2 + page.len() &gt; CHUNK_TARGET_BYTES {
+        chunks.push(Chunk {
+            text: std::mem::take(&amp;mut cur_text),   // ← the interesting line
+            first_page: cur_first,
+            last_page: cur_last,
+        });
+    }
+    if cur_text.is_empty() { cur_first = page_no; } else { cur_text.push_str("\n\n"); }
+    cur_text.push_str(page);
+    cur_last = page_no;
+}</code></pre>
+
+  <p><strong>Java equivalent:</strong></p>
+  <pre><code>List&lt;Chunk&gt; chunks = new ArrayList&lt;&gt;();
+StringBuilder curText = new StringBuilder();
+int curFirst = 0, curLast = 0;
+
+for (int i = 0; i &lt; pages.length; i++) {
+    String page = pages[i].trim();
+    if (page.isEmpty()) continue;
+
+    if (curText.length() &gt; 0 &amp;&amp; curText.length() + 2 + page.length() &gt; TARGET) {
+        chunks.add(new Chunk(curText.toString(), curFirst, curLast));
+        curText.setLength(0);                    // reset the buffer
+    }
+    …
+}</code></pre>
+
+  <p>
+    The line worth studying is <code>std::mem::take(&amp;mut cur_text)</code>. Java's
+    <code>curText.toString()</code> <em>copies</em> the buffer and then clears it.
+    Rust's <code>take</code> does neither: it <strong>moves</strong> the String into
+    the Chunk (pointer handoff, zero copy) and leaves a fresh empty String behind.
+    Without it, the borrow checker would rightly refuse — you can't move
+    <code>cur_text</code> into the Vec while the loop still owns it for the next
+    iteration. <code>mem::take</code> is the idiomatic "move it out and reset" tool,
+    and there is no Java equivalent because Java never has to prove who owns a value.
+  </p>
+
+  <p>
+    Also note the loop destructures <code>enumerate()</code> into
+    <code>(i, raw_page)</code> — pattern matching in the for-loop head, where Java
+    would track an index variable.
+  </p>
+
+  <h2>Optional frontmatter fields</h2>
+
+  <p>
+    Chunk files carry two new fields linking them to their parent document; a
+    stand-alone document's frontmatter must not change at all. That requirement
+    maps exactly onto <code>Option</code>:
+  </p>
+
+  <pre><code>pub struct OkfFrontmatter {
+    …
+    pub parent: Option&lt;String&gt;,   // slug of the parent document, if chunked
+    pub pages:  Option&lt;String&gt;,   // "12-18", if chunked
+    …
+}
+
+// In render():
+if let Some(parent) = &amp;self.parent {
+    out.push_str(&amp;format!("parent: {parent}\n"));
+}</code></pre>
+
+  <p>
+    The result, from a real extraction (note the honest timestamp — this step also
+    replaced the hardcoded date with <code>jiff::Timestamp::now()</code>, Rust's
+    equivalent of <code>java.time.Instant.now()</code>):
+  </p>
+
+  <pre><code>---
+type: technical-note
+title: KUKA Technical Note-MQTT Payload Definitions_Ver1.1.9 (pages 9-16)
+resource: kuka-docs/KUKA Technical Note-MQTT Payload Definitions_Ver1.1.9.pdf
+parent: kuka-technical-note-mqtt-payload-definitions_ver119
+pages: 9-16
+timestamp: 2026-07-04T21:37:13.595435146Z
+---</code></pre>
+
+  <h2>Refusing to write garbage</h2>
+
+  <p>
+    Chunking exposed an old bug's root cause. The bundle contained a 213-byte
+    <code>emergencyfirealarm.md</code> — frontmatter with an empty body — which
+    matched searches via its title and returned blank excerpts
+    (see the finding in <a href="refactor-05-searchhit-data-api.html">Appendix 5</a>).
+    The new pipeline makes that impossible:
+  </p>
+
+  <pre><code>let chunks = chunk_pages(text.trim());
+if chunks.is_empty() {
+    bail!("no text could be extracted (image-only or empty PDF?)");
+}</code></pre>
+
+  <p>
+    Re-extracting the real bundle proved the point: 9 of 10 PDFs extracted cleanly
+    (two of them into 2 and 3 page-ranged chunks), and EmergencyFireAlarm.pdf —
+    which turns out to be a scanned, image-only PDF — was <em>refused with a clear
+    error</em> instead of silently producing an empty file. Fixing that document is
+    an OCR problem, now visibly so.
+  </p>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>sb.toString()</code> then <code>sb.setLength(0)</code> — copy + reset</td>
+        <td><code>std::mem::take(&amp;mut s)</code> — move + reset, zero copy</td>
+      </tr>
+      <tr>
+        <td>index variable in a for loop</td>
+        <td><code>for (i, page) in iter.enumerate()</code> — destructured</td>
+      </tr>
+      <tr>
+        <td><code>Instant.now().toString()</code> (ISO-8601)</td>
+        <td><code>jiff::Timestamp::now().to_string()</code> (RFC 3339)</td>
+      </tr>
+      <tr>
+        <td>nullable field + <code>if (x != null)</code></td>
+        <td><code>Option&lt;String&gt;</code> + <code>if let Some(x)</code></td>
+      </tr>
+      <tr>
+        <td><code>throw new IllegalStateException(msg)</code></td>
+        <td><code>bail!(msg)</code> (anyhow early-return)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "What exactly does std::mem::take leave behind, and how does it relate to Default?",
+    "Why does the chunker compare byte lengths instead of counting characters?",
+    or "Why jiff instead of chrono, and what does Rust use instead of java.time zones?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-07-config-injection.html">← Refactor Appendix 7: Constructor Injection</a>
+    <a href="0020-batch-extraction.html">← Back to Lesson 20: Batch Extraction</a>
+  </nav>
+
+</div>
+</body>
+</html>

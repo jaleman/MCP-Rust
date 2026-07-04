@@ -1,7 +1,9 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use mcp_server::chunk::{Chunk, chunk_pages};
 use mcp_server::frontmatter::OkfFrontmatter; // shared OKF format — same module the server parses with
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 // CLI argument definition — clap reads these field types and doc comments
 // to generate --help output and argument validation automatically.
@@ -40,9 +42,14 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Every file written during this run. Two different PDFs whose names
+    // differ only in stripped punctuation produce the same slug — the second
+    // would silently overwrite the first without this check.
+    let mut written: HashSet<PathBuf> = HashSet::new();
+
     if input.is_file() {
         // Single-file mode — exit non-zero on failure so callers can detect it
-        if let Err(e) = process_pdf(input, knowledge_dir, args.force_pdftotext) {
+        if let Err(e) = process_pdf(input, knowledge_dir, args.force_pdftotext, &mut written) {
             eprintln!("Error: {e}");
             std::process::exit(1);
         }
@@ -59,13 +66,17 @@ fn main() {
         for entry in entries.flatten() {
             let path = entry.path();
 
-            // Skip non-PDF files silently
-            if path.extension().and_then(|e| e.to_str()) != Some("pdf") {
+            // Skip non-PDF files silently (case-insensitive: FILE.PDF counts)
+            let is_pdf = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+            if !is_pdf {
                 continue;
             }
 
             // Match on the result so one bad PDF does not abort the batch
-            match process_pdf(&path, knowledge_dir, args.force_pdftotext) {
+            match process_pdf(&path, knowledge_dir, args.force_pdftotext, &mut written) {
                 Ok(()) => ok += 1,
                 Err(e) => {
                     eprintln!("Skipping {}: {e}", path.display());
@@ -100,12 +111,22 @@ fn try_pdftotext(pdf_path: &Path) -> Result<String> {
     String::from_utf8(output.stdout).context("pdftotext output is not valid UTF-8")
 }
 
-// Extracts text from a single PDF and writes it as an OKF markdown file.
-// Returns Ok(()) on success or an error the caller can log and continue from.
-fn process_pdf(pdf_path: &Path, knowledge_dir: &Path, force_pdftotext: bool) -> Result<()> {
+// Extracts text from a single PDF and writes it as one or more OKF markdown
+// files. Documents that fit in one chunk (~8 KB) produce a single file exactly
+// as before; larger documents produce one file per chunk with parent/pages
+// frontmatter so search hits carry page-level provenance.
+fn process_pdf(
+    pdf_path: &Path,
+    knowledge_dir: &Path,
+    force_pdftotext: bool,
+    written: &mut HashSet<PathBuf>,
+) -> Result<()> {
     println!("Extracting: {}", pdf_path.display());
 
-    // Try pdf-extract first — unless the caller forced pdftotext
+    // Try pdf-extract first — unless the caller forced pdftotext.
+    // Note: only pdftotext emits form-feed page separators, so page-accurate
+    // chunking needs --force-pdftotext; pdf-extract output falls back to
+    // paragraph-based splitting for oversized documents.
     let text = if force_pdftotext {
         try_pdftotext(pdf_path)?
     } else {
@@ -127,21 +148,75 @@ fn process_pdf(pdf_path: &Path, knowledge_dir: &Path, force_pdftotext: bool) -> 
         .replace(' ', "-")
         .replace(['.', '(', ')'], ""); // strip punctuation that would break file paths
 
-    // Build the OKF document through the shared frontmatter module — the same
-    // code the server parses with, so the format cannot drift between binaries.
-    let frontmatter = OkfFrontmatter {
-        doc_type: "technical-note".to_string(),
-        title: stem.to_string(),
-        description: "Extracted from KUKA documentation.".to_string(),
-        resource: format!("kuka-docs/{filename}"),
-        tags: "[extracted, technical-note]".to_string(),
-        timestamp: "2026-06-26T00:00:00Z".to_string(),
-    };
-    let okf = frontmatter.render(text.trim());
+    let resource = format!("kuka-docs/{filename}");
+    // Real extraction time — files used to carry a hardcoded date
+    let timestamp = jiff::Timestamp::now().to_string();
 
-    let output = knowledge_dir.join(format!("{slug}.md"));
-    std::fs::write(&output, &okf)?;
-    println!("  → {}", output.display());
+    let chunks = chunk_pages(text.trim());
 
+    // Both extractors produced nothing — refuse to write a frontmatter-only
+    // file (an empty body used to slip through and pollute the bundle).
+    if chunks.is_empty() {
+        bail!("no text could be extracted (image-only or empty PDF?)");
+    }
+
+    if chunks.len() == 1 {
+        // Fits in one chunk: single file, no parent/pages — exactly as before
+        let okf = OkfFrontmatter {
+            doc_type: "technical-note".to_string(),
+            title: stem.to_string(),
+            description: "Extracted from KUKA documentation.".to_string(),
+            resource,
+            parent: None,
+            pages: None,
+            tags: "[extracted, technical-note]".to_string(),
+            timestamp,
+        }
+        .render(&chunks[0].text);
+        write_output(&knowledge_dir.join(format!("{slug}.md")), &okf, written)?;
+    } else {
+        println!("  {} chunk(s):", chunks.len());
+        for chunk in &chunks {
+            let Chunk { text, first_page, last_page } = chunk;
+            let okf = OkfFrontmatter {
+                doc_type: "technical-note".to_string(),
+                title: format!("{stem} (pages {first_page}-{last_page})"),
+                description: "Extracted from KUKA documentation.".to_string(),
+                resource: resource.clone(),
+                parent: Some(slug.clone()),
+                pages: Some(format!("{first_page}-{last_page}")),
+                tags: "[extracted, technical-note]".to_string(),
+                timestamp: timestamp.clone(),
+            }
+            .render(text);
+
+            // Page ranges are usually unique per chunk; sub-split oversized
+            // pages share a range, so disambiguate with a counter suffix.
+            let base = format!("{slug}-p{first_page:03}-{last_page:03}");
+            let mut output = knowledge_dir.join(format!("{base}.md"));
+            let mut n = 1;
+            while written.contains(&output) {
+                n += 1;
+                output = knowledge_dir.join(format!("{base}-{n}.md"));
+            }
+            write_output(&output, &okf, written)?;
+        }
+    }
+
+    Ok(())
+}
+
+// Writes one OKF file, warning when a file written EARLIER IN THIS RUN is
+// about to be clobbered (two PDFs collapsing to the same slug). Overwriting
+// files from a previous run is normal re-extraction and stays silent.
+fn write_output(path: &Path, content: &str, written: &mut HashSet<PathBuf>) -> Result<()> {
+    if !written.insert(path.to_path_buf()) {
+        eprintln!(
+            "  WARNING: {} was already written by another PDF in this run — overwriting",
+            path.display()
+        );
+    }
+    std::fs::write(path, content)?;
+    println!("  → {}", path.display());
     Ok(())
 }
