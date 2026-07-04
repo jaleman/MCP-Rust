@@ -49,7 +49,7 @@ cargo is not installed on the Windows host.
 |------|-------------|--------|-------|
 | 1 | lib/bin split, shared frontmatter module | complete | commit 17967a8; lessons refactor-01, refactor-02 |
 | 2 | Document + load_bundle, error/traversal/extension fixes | complete | PR #1 merged (948a356); lessons refactor-03, refactor-04 |
-| 3 | SearchHit API, consts, LazyLock stop words, test rewrite | not started | |
+| 3 | SearchHit API, consts, LazyLock stop words, test rewrite | in progress | implemented (793fa54) + lessons refactor-05/06; PR open, awaiting user merge |
 | 4 | config into KukaServer | not started | |
 | 5a | chunking in extract | not started | |
 | 5b | inverted index, seek excerpts, reload_docs | not started | |
@@ -285,3 +285,18 @@ Newest entry last. Every status change in the dashboard gets a line here.
   Next action: ask user for permission to start step 3 (SearchHit API,
   consts, LazyLock stop words, test rewrite) on branch
   refactor/step-3-searchhit-api.
+- 2026-07-04 — STEP 3 implemented on branch refactor/step-3-searchhit-api
+  (commit 793fa54). search.rs is pure domain logic (no rmcp): parse_query
+  + search(docs, terms) -> Vec<SearchHit>; presentation (run_search /
+  format_hit, wording, isError) moved to main.rs. Consts for all tuning
+  knobs; STOP_WORDS in static LazyLock; clippy fully clean (0 warnings);
+  27/27 tests (23 lib + 4 new bin-level; bin tests build own fixture —
+  lib test_util invisible across crate boundary). Live MCP check: output
+  format identical. FINDING (data, not code): the only real bundle doc,
+  knowledge/emergencyfirealarm.md, has an EMPTY BODY (213 bytes, front-
+  matter only — bad extraction); it matches via frontmatter title and
+  yields an empty fallback excerpt "......"; pre-existing behavior, fix
+  is re-running the extractor on that PDF. Lessons refactor-05 and
+  refactor-06 written. PR opened; step complete when user merges.
+  Next action after merge: ask permission for step 4 (config into
+  KukaServer).
