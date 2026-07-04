@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use mcp_server::bundle::{knowledge_dir, list_docs_in, load_bundle, resource_stem_is_safe};
-use mcp_server::search::search_docs_in;
+use mcp_server::search::{SearchHit, parse_query, search};
 use rmcp::{
     // MCP SDK types: error type, server trait, service wiring, tool routing machinery,
     // parameter wrapper, all protocol model types, JSON schema + serde derives,
@@ -74,8 +74,60 @@ impl KukaServer {
         &self,
         Parameters(input): Parameters<SearchInput>,
     ) -> Result<CallToolResult, McpError> {
-        search_docs_in(&knowledge_dir(), input.query)
+        Ok(run_search(&knowledge_dir(), &input.query))
     }
+}
+
+// The presentation layer for search: runs the engine (search.rs, which returns
+// plain SearchHit data) and formats the outcome as an MCP tool result. All
+// user-facing wording lives here, none of it in the engine.
+fn run_search(dir: &std::path::Path, query: &str) -> CallToolResult {
+    let query_lower = query.to_lowercase();
+    let terms = parse_query(&query_lower);
+
+    // Guard: all() over an empty term list is vacuously true and would match
+    // every document. Return early with a helpful message instead.
+    if terms.is_empty() {
+        return CallToolResult::success(vec![Content::text(
+            "Query contains only common words. Please add specific search terms.".to_string(),
+        )]);
+    }
+
+    // A missing/unreadable bundle directory is a tool ERROR (isError = true),
+    // clearly distinct from "no results found".
+    let docs = match load_bundle(dir) {
+        Ok(docs) => docs,
+        Err(e) => {
+            return CallToolResult::error(vec![Content::text(format!(
+                "Cannot read knowledge bundle: {e:#}"
+            ))]);
+        }
+    };
+
+    let hits = search(&docs, &terms);
+
+    let text = if hits.is_empty() {
+        format!("No results found for '{query}'.")
+    } else {
+        let ranked: Vec<String> = hits.iter().map(format_hit).collect();
+        format!(
+            "Found {} result(s) for '{query}':\n\n{}",
+            hits.len(),
+            ranked.join("\n\n")
+        )
+    };
+
+    CallToolResult::success(vec![Content::text(text)])
+}
+
+// Renders one hit as the bullet-point block shown to the client.
+fn format_hit(hit: &SearchHit) -> String {
+    format!(
+        "• {}\n  Source: {}\n\n  ...{}...",
+        hit.title,
+        hit.resource,
+        hit.excerpts.join("\n\n  ...")
+    )
 }
 
 // #[tool_handler] wires the tool_router into the ServerHandler trait so the MCP
@@ -180,4 +232,70 @@ async fn main() -> Result<()> {
     let service = KukaServer::new().serve(stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+// Tests for the PRESENTATION layer: wording, isError flags, empty-query guard.
+// The engine itself is tested in the library (search.rs); these only check
+// what this binary adds on top. Note: the library's #[cfg(test)] test_util is
+// not visible here — a binary is a separate crate, and the lib it links
+// against is compiled without cfg(test) — so this module builds its own fixture.
+#[cfg(test)]
+mod tool_tests {
+    use super::*;
+    use std::fs;
+
+    fn bundle_with_one_doc() -> tempfile::TempDir {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let doc = "\
+---
+type: technical-note
+title: Reflector Guide
+description: Fixture for tool-layer tests.
+resource: kuka-docs/test.pdf
+tags: [test]
+timestamp: 2026-01-01T00:00:00Z
+---
+
+Reflectors must be mounted at a height of 150 to 2000 mm above floor level.";
+        fs::write(temp_dir.path().join("reflector-guide.md"), doc).unwrap();
+        temp_dir
+    }
+
+    // Pulls the text out of a CallToolResult for wording assertions.
+    fn result_text(result: &CallToolResult) -> String {
+        format!("{:?}", result.content)
+    }
+
+    #[test]
+    fn search_tool_formats_hits() {
+        let temp_dir = bundle_with_one_doc();
+        let result = run_search(temp_dir.path(), "reflector height");
+        assert_ne!(result.is_error, Some(true));
+        let text = result_text(&result);
+        assert!(text.contains("Found 1 result(s) for 'reflector height'"));
+        assert!(text.contains("Reflector Guide"));
+        assert!(text.contains("Source: kuka-docs/test.pdf"));
+    }
+
+    #[test]
+    fn search_tool_reports_missing_bundle_as_error() {
+        let result = run_search(std::path::Path::new("no-such-directory-anywhere"), "reflector");
+        assert_eq!(result.is_error, Some(true), "missing dir must set isError");
+        assert!(result_text(&result).contains("Cannot read knowledge bundle"));
+    }
+
+    #[test]
+    fn search_tool_rejects_stop_word_only_query() {
+        let temp_dir = bundle_with_one_doc();
+        let result = run_search(temp_dir.path(), "what is the");
+        assert_ne!(result.is_error, Some(true), "guard message is not an error");
+        assert!(result_text(&result).contains("only common words"));
+    }
+
+    #[test]
+    fn search_tool_reports_no_results() {
+        let temp_dir = bundle_with_one_doc();
+        let result = run_search(temp_dir.path(), "hydraulic pump");
+        assert!(result_text(&result).contains("No results found for 'hydraulic pump'"));
+    }
 }
