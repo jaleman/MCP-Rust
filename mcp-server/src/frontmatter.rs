@@ -15,6 +15,11 @@ pub struct OkfFrontmatter {
     pub title: String,
     pub description: String,
     pub resource: String,
+    /// For chunked documents: the slug of the parent document this chunk
+    /// belongs to. None for stand-alone (unchunked) documents.
+    pub parent: Option<String>,
+    /// For chunked documents: the source page range, e.g. "12-18".
+    pub pages: Option<String>,
     /// Rendered verbatim, e.g. "[extracted, technical-note]"
     pub tags: String,
     pub timestamp: String,
@@ -22,25 +27,25 @@ pub struct OkfFrontmatter {
 
 impl OkfFrontmatter {
     /// Renders a complete OKF document: frontmatter block followed by the body.
+    /// Optional fields are omitted entirely when absent — a stand-alone
+    /// document's frontmatter looks exactly as it did before chunking existed.
     pub fn render(&self, body: &str) -> String {
-        format!(
-            "---\n\
-             type: {}\n\
-             title: {}\n\
-             description: {}\n\
-             resource: {}\n\
-             tags: {}\n\
-             timestamp: {}\n\
-             ---\n\n\
-             {}",
-            self.doc_type,
-            self.title,
-            self.description,
-            self.resource,
-            self.tags,
-            self.timestamp,
-            body,
-        )
+        let mut out = String::from("---\n");
+        out.push_str(&format!("type: {}\n", self.doc_type));
+        out.push_str(&format!("title: {}\n", self.title));
+        out.push_str(&format!("description: {}\n", self.description));
+        out.push_str(&format!("resource: {}\n", self.resource));
+        if let Some(parent) = &self.parent {
+            out.push_str(&format!("parent: {parent}\n"));
+        }
+        if let Some(pages) = &self.pages {
+            out.push_str(&format!("pages: {pages}\n"));
+        }
+        out.push_str(&format!("tags: {}\n", self.tags));
+        out.push_str(&format!("timestamp: {}\n", self.timestamp));
+        out.push_str("---\n\n");
+        out.push_str(body);
+        out
     }
 }
 
@@ -98,6 +103,8 @@ mod tests {
             title: "Reflector Guide".to_string(),
             description: "Extracted from KUKA documentation.".to_string(),
             resource: "kuka-docs/test.pdf".to_string(),
+            parent: None,
+            pages: None,
             tags: "[extracted, technical-note]".to_string(),
             timestamp: "2026-01-01T00:00:00Z".to_string(),
         };
@@ -116,5 +123,29 @@ mod tests {
             Some("kuka-docs/test.pdf".to_string())
         );
         assert!(doc.ends_with("---\n\nBody text."));
+        // Absent optional fields must not appear at all
+        assert!(!doc.contains("parent:"));
+        assert!(!doc.contains("pages:"));
+    }
+
+    #[test]
+    fn render_includes_chunk_fields_when_present() {
+        let fm = OkfFrontmatter {
+            doc_type: "technical-note".to_string(),
+            title: "Fleet Manual (pages 12-18)".to_string(),
+            description: "Extracted from KUKA documentation.".to_string(),
+            resource: "kuka-docs/fleet.pdf".to_string(),
+            parent: Some("fleet-manual".to_string()),
+            pages: Some("12-18".to_string()),
+            tags: "[extracted]".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let doc = fm.render("Chunk body.");
+
+        assert_eq!(
+            extract_frontmatter_field(&doc, "parent"),
+            Some("fleet-manual".to_string())
+        );
+        assert_eq!(extract_frontmatter_field(&doc, "pages"), Some("12-18".to_string()));
     }
 }

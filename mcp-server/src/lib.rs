@@ -9,6 +9,7 @@
 // (the crate name from Cargo.toml, with `-` becoming `_`).
 
 pub mod bundle;
+pub mod chunk;
 pub mod frontmatter;
 pub mod search;
 
