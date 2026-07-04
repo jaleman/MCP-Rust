@@ -3,13 +3,9 @@ name = "mcp-server"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "mcp-server"
-path = "src/main.rs"
-
-[[bin]]
-name = "extract"
-path = "src/extract.rs"
+# No [[bin]] sections needed: Cargo auto-discovers src/main.rs as the default
+# binary (named after the package) and every file in src/bin/ as a further
+# binary. src/lib.rs is auto-discovered as the library both binaries share.
 
 [dependencies]
 anyhow = "1.0.103"
@@ -19,7 +15,10 @@ rmcp = { version = "1.8.0", features = ["macros", "transport-io"] }
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
 strsim = "0.11.1"
-tempfile = "3.27.0"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+# Only compiled for `cargo test` — like Maven's <scope>test</scope>
+[dev-dependencies]
+tempfile = "3.27.0"

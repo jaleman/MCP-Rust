@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
-use clap::Parser; // ← new import
+use clap::Parser;
+use mcp_server::frontmatter::OkfFrontmatter; // shared OKF format — same module the server parses with
 use std::path::Path;
 
 // CLI argument definition — clap reads these field types and doc comments
@@ -126,22 +127,17 @@ fn process_pdf(pdf_path: &Path, knowledge_dir: &Path, force_pdftotext: bool) -> 
         .replace(' ', "-")
         .replace(['.', '(', ')'], ""); // strip punctuation that would break file paths
 
-    // Write the OKF frontmatter block followed by the extracted text body
-    let okf = format!(
-        "---
-type: technical-note
-title: {stem}
-description: Extracted from KUKA documentation.
-resource: kuka-docs/{filename}
-tags: [extracted, technical-note]
-timestamp: 2026-06-26T00:00:00Z
----
-
-{body}",
-        stem = stem,
-        filename = filename,
-        body = text.trim(),
-    );
+    // Build the OKF document through the shared frontmatter module — the same
+    // code the server parses with, so the format cannot drift between binaries.
+    let frontmatter = OkfFrontmatter {
+        doc_type: "technical-note".to_string(),
+        title: stem.to_string(),
+        description: "Extracted from KUKA documentation.".to_string(),
+        resource: format!("kuka-docs/{filename}"),
+        tags: "[extracted, technical-note]".to_string(),
+        timestamp: "2026-06-26T00:00:00Z".to_string(),
+    };
+    let okf = frontmatter.render(text.trim());
 
     let output = knowledge_dir.join(format!("{slug}.md"));
     std::fs::write(&output, &okf)?;
