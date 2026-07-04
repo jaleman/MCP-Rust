@@ -50,7 +50,7 @@ cargo is not installed on the Windows host.
 | 1 | lib/bin split, shared frontmatter module | complete | commit 17967a8; lessons refactor-01, refactor-02 |
 | 2 | Document + load_bundle, error/traversal/extension fixes | complete | PR #1 merged (948a356); lessons refactor-03, refactor-04 |
 | 3 | SearchHit API, consts, LazyLock stop words, test rewrite | complete | PR #2 merged (1ace0b2); lessons refactor-05, refactor-06 |
-| 4 | config into KukaServer | not started | |
+| 4 | config into KukaServer | in progress | implemented (8b029e8) + lesson refactor-07; PR open, awaiting user merge |
 | 5a | chunking in extract | not started | |
 | 5b | inverted index, seek excerpts, reload_docs | not started | |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
@@ -318,3 +318,15 @@ Newest entry last. Every status change in the dashboard gets a line here.
   cache — `git restore .` clears it. Prefer running git from the host;
   avoid git commands as root inside the container (they can wedge the
   shared .git/index ownership/stat data).
+- 2026-07-04 — STEP 4 implemented on branch refactor/step-4-server-config
+  (commit 8b029e8). KukaServer { knowledge_dir: PathBuf, tool_router };
+  main() reads KUKA_KNOWLEDGE_DIR exactly once and logs it; free
+  bundle::knowledge_dir() deleted. Folded in the smaller-fixes item:
+  get_info instructions now describe search_docs/list_docs/resources.
+  New bin test constructs a fully-wired KukaServer against a temp dir
+  and calls the tool methods directly. 28/28 tests (23 lib + 5 bin),
+  clippy clean. Live MCP check from /tmp with KUKA_KNOWLEDGE_DIR set:
+  bundle found, new instructions served. Lesson refactor-07 written.
+  PR opened; step complete when user merges. Next after merge: ask
+  permission for step 5a (chunking in extract) on branch
+  refactor/step-5a-chunking.
