@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 7: Read the Environment Once — Constructor Injection</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 7</div>
+    <h1>Read the Environment Once — Constructor Injection</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 4 — commit <code>8b029e8</code></span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The smell: hidden dependencies</h2>
+
+  <p>
+    Every tool call used to invoke a free function that consulted the process
+    environment on the spot:
+  </p>
+
+  <pre><code>// bundle.rs — called by list_docs, search_docs, list_resources, read_resource…
+pub fn knowledge_dir() -&gt; PathBuf {
+    PathBuf::from(std::env::var("KUKA_KNOWLEDGE_DIR")
+        .unwrap_or_else(|_| "knowledge".to_string()))
+}</code></pre>
+
+  <p>
+    That's the Rust spelling of a Java anti-pattern you'll recognise instantly:
+    <code>System.getenv()</code> scattered through business logic, or a static
+    <code>Config.getKnowledgeDir()</code> consulted from everywhere. The dependency is
+    real but <em>invisible</em> — nothing in <code>KukaServer</code>'s type says "I need
+    a directory", so you can't tell from a signature what the server depends on, and
+    you can't substitute the value in a test without mutating global process state.
+  </p>
+
+  <h2>The fix: what Spring calls constructor injection</h2>
+
+  <p><strong>Rust:</strong></p>
+  <pre><code>#[derive(Clone)]
+struct KukaServer {
+    /// Where the knowledge bundle lives. Resolved once at startup.
+    knowledge_dir: PathBuf,
+    tool_router: ToolRouter&lt;KukaServer&gt;,
+}
+
+impl KukaServer {
+    fn new(knowledge_dir: PathBuf) -&gt; Self { … }
+}
+
+// main() is now the ONLY place that reads the environment:
+let knowledge_dir = PathBuf::from(
+    std::env::var("KUKA_KNOWLEDGE_DIR").unwrap_or_else(|_| "knowledge".to_string()),
+);
+let service = KukaServer::new(knowledge_dir).serve(stdio()).await?;</code></pre>
+
+  <p><strong>Java equivalent</strong> — the same move Spring pushed the whole ecosystem toward:</p>
+  <pre><code>// Before: hidden static lookup                 // After: declared dependency
+class KukaServer {                               class KukaServer {
+    void listDocs() {                                private final Path knowledgeDir;
+        var dir = Config.knowledgeDir(); // ??       KukaServer(Path knowledgeDir) {
+        …                                                this.knowledgeDir = knowledgeDir;
+    }                                                }
+}                                                }</code></pre>
+
+  <p>
+    Rust has no Spring container — and doesn't need one here. "Dependency injection"
+    without a framework is just: <em>the caller passes the dependency to the
+    constructor</em>. <code>main()</code> plays the role of the application context:
+    it resolves configuration at the composition root and wires the object graph
+    (currently one object; the step-5 index will be the second).
+  </p>
+
+  <h2>The payoff arrives immediately: the server itself is now testable</h2>
+
+  <p>
+    Before this step, no test ever constructed a <code>KukaServer</code> — the tests
+    called helper functions with explicit <code>dir</code> parameters (the
+    <code>_in(dir, …)</code> naming convention was invented purely to route around the
+    hidden env dependency). Now the real, fully-wired server runs against a temp
+    directory:
+  </p>
+
+  <pre><code>#[test]
+fn server_tools_use_injected_knowledge_dir() {
+    let temp_dir = bundle_with_one_doc();
+    let server = KukaServer::new(temp_dir.path().to_path_buf());
+
+    let list = server.list_docs().unwrap();
+    assert!(result_text(&amp;list).contains("Reflector Guide"));
+
+    let search = server
+        .search_docs(Parameters(SearchInput { query: "reflector height".to_string() }))
+        .unwrap();
+    assert!(result_text(&amp;search).contains("Found 1 result(s)"));
+}</code></pre>
+
+  <p>
+    Note what is <em>not</em> in that test: no environment mutation, no
+    <code>std::env::set_var</code> (which is unsafe in multi-threaded test runs —
+    Rust's test harness runs tests in parallel by default, unlike JUnit's default
+    single-thread-per-class), no working-directory tricks. The dependency goes in
+    through the front door.
+  </p>
+
+  <h2>Also in this commit: the server finally introduces itself properly</h2>
+
+  <p>
+    MCP servers send an <code>instructions</code> string during the handshake — it's
+    documentation <em>for the AI agent</em> deciding when to call your tools. Ours
+    said only "Use the ping tool to confirm the server is alive", which undersells a
+    search engine rather badly. Agents read this text the way developers read
+    Javadoc; now it says what the server knows and which tool to reach for:
+  </p>
+
+  <pre><code>"KUKA AMR robot knowledge server, grounded in official KUKA documentation
+ (AMR fleet manuals, technical notes, safety and deployment guides).
+ Use search_docs to find relevant passages for a query, list_docs to see
+ every document grouped by type, and the kuka://docs/{name} resources to
+ read full documents. ping confirms the server is alive."</code></pre>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>System.getenv()</code> in business logic</td>
+        <td><code>std::env::var()</code> outside main() — same smell</td>
+      </tr>
+      <tr>
+        <td>Spring constructor injection</td>
+        <td>plain <code>fn new(dep: …) -&gt; Self</code> — no framework needed</td>
+      </tr>
+      <tr>
+        <td>application context / composition root</td>
+        <td><code>main()</code> resolves config and wires the graph</td>
+      </tr>
+      <tr>
+        <td><code>private final Path knowledgeDir</code></td>
+        <td><code>knowledge_dir: PathBuf</code> (immutable unless <code>&amp;mut</code>)</td>
+      </tr>
+      <tr>
+        <td>JUnit runs test classes single-threaded by default</td>
+        <td>cargo runs tests in parallel — env mutation is a footgun</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "Why is std::env::set_var unsafe in Rust 2024?",
+    "When would a Rust project actually want a DI framework?",
+    or "Why does the server derive Clone, and what does cloning a PathBuf cost?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-06-lazylock-consts-and-test-layers.html">← Refactor Appendix 6: LazyLock, Consts, and Test Layers</a>
+    <a href="0017-configurable-path.html">← Back to Lesson 17: Configurable Path</a>
+  </nav>
+
+</div>
+</body>
+</html>
