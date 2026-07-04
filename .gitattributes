@@ -1,0 +1,6 @@
+# This working tree is shared between the Windows host and the Linux
+# devcontainer. Without a fixed policy, Windows git (autocrlf=true) writes
+# CRLF to disk while container git expects LF, and every touched file shows
+# as "modified" inside the container. Pinning LF for all text files makes
+# both sides agree. Rust, Cargo, and VS Code on Windows all handle LF fine.
+* text=auto eol=lf
