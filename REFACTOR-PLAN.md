@@ -48,7 +48,7 @@ cargo is not installed on the Windows host.
 | Step | Description | Status | Notes |
 |------|-------------|--------|-------|
 | 1 | lib/bin split, shared frontmatter module | complete | commit 17967a8; lessons refactor-01, refactor-02 |
-| 2 | Document + load_bundle, error/traversal/extension fixes | not started | |
+| 2 | Document + load_bundle, error/traversal/extension fixes | in progress | implemented (d0b9f07) + lessons refactor-03/04; PR open, awaiting user merge |
 | 3 | SearchHit API, consts, LazyLock stop words, test rewrite | not started | |
 | 4 | config into KukaServer | not started | |
 | 5a | chunking in extract | not started | |
@@ -267,3 +267,15 @@ Newest entry last. Every status change in the dashboard gets a line here.
   lessons/refactor-01-lib-and-bin-split.html,
   lessons/refactor-02-shared-frontmatter-module.html.
   Next action: ask user for permission to start step 2 (Document type).
+- 2026-07-04 — STEP 2 implemented on branch refactor/step-2-document-type
+  (commit d0b9f07). Document struct + load_bundle in bundle.rs; all three
+  consumers (list_docs_in, search_docs_in, list_resources) now use it.
+  Missing bundle dir → CallToolResult::error / protocol error (was: fake
+  "no documents"); unreadable files → tracing::warn + skip; extension
+  check case-insensitive; read_resource guarded by resource_stem_is_safe
+  (path traversal). 21/21 tests (5 new). Manually verified over live MCP
+  stdio in devcontainer: list_docs on real bundle OK, missing-dir error
+  OK, ../../etc/passwd rejected OK. Lessons refactor-03-document-type
+  and refactor-04-errors-that-lie written. PR opened for user review —
+  step is complete when the user merges it. Next action after merge:
+  flip dashboard to complete, then ask permission for step 3.

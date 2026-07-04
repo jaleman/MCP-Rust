@@ -1,8 +1,9 @@
 // The search engine: fuzzy matching, boilerplate filtering, proximity scoring,
-// and excerpt building. Knows nothing about how documents are listed or served —
-// (refactor step 3 will remove its knowledge of MCP result types too).
+// and excerpt building. Documents arrive already loaded and parsed (bundle.rs);
+// this module only decides which ones match and what to show.
+// (Refactor step 3 will remove its knowledge of MCP result types too.)
 
-use crate::frontmatter::extract_frontmatter_field;
+use crate::bundle::load_bundle;
 use rmcp::ErrorData as McpError;
 use rmcp::model::{CallToolResult, Content};
 use std::collections::{HashMap, HashSet};
@@ -120,132 +121,125 @@ pub fn search_docs_in(dir: &Path, query: String) -> Result<CallToolResult, McpEr
         )]));
     }
 
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
+    // One loader for the whole bundle. A missing directory is a tool ERROR
+    // (isError = true in MCP) — clearly distinct from "no results found".
+    let docs = match load_bundle(dir) {
+        Ok(docs) => docs,
+        Err(e) => {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Cannot read knowledge bundle: {e:#}"
+            ))]));
+        }
+    };
 
-            // Skip non-markdown files (e.g. the source PDFs themselves)
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+    for doc in &docs {
+        // Lowercase once and reuse for all term checks against this document
+        let lower = doc.content.to_lowercase();
+
+        // Body offset was computed once at load time (bundle.rs) — excerpts
+        // must never anchor inside the frontmatter block.
+        let body_start = doc.body_start;
+
+        // A document qualifies only if every query term matches (exactly or fuzzily)
+        if terms.iter().all(|term| fuzzy_word_match(&lower, term)) {
+            // Collect byte positions of every exact match across all query terms,
+            // searching only within the body (after frontmatter) so frontmatter
+            // field values don't anchor the excerpt window
+            let mut positions: Vec<usize> = terms
+                .iter()
+                .flat_map(|term| {
+                    lower[body_start..]
+                        .match_indices(*term)
+                        .map(|(pos, _)| pos + body_start)
+                })
+                .collect();
+            positions.sort();
+            positions.dedup();
+
+            // Build the boilerplate set from the body and remove any position
+            // that lands on a line appearing 3+ times (headers, footers, page titles).
+            let exact_positions_before_filter = positions.len();
+            let boilerplate = repeated_lines(&lower[body_start..]);
+            let positions: Vec<usize> = positions
+                .into_iter()
+                .filter(|&pos| {
+                    !boilerplate.contains(&normalize_line(line_at_pos(&lower, pos)))
+                })
+                .collect();
+
+            // Skip only when exact matches existed but ALL landed on boilerplate lines.
+            // If exact_positions_before_filter is 0, this was a fuzzy-only match —
+            // let it fall through to the body-start excerpt fallback below.
+            if exact_positions_before_filter > 0 && positions.is_empty() {
                 continue;
             }
 
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                // Lowercase once and reuse for all term checks against this document
-                let lower = content.to_lowercase();
+            // Proximity scoring: rank each position by how many distinct query terms
+            // appear within a ±500 char window around it. Positions where multiple
+            // terms co-occur (e.g. "mission" + "command" + "payload" together) score
+            // higher than isolated hits in page headers or table-of-contents lines.
+            let window_size = 500_usize;
+            let mut scored: Vec<(usize, usize)> = positions
+                .iter()
+                .map(|&pos| {
+                    // floor/ceil snap to nearest valid UTF-8 char boundary before slicing
+                    let win_start = floor_char_boundary(
+                        &lower,
+                        pos.saturating_sub(window_size).max(body_start),
+                    );
+                    let win_end = ceil_char_boundary(
+                        &lower,
+                        (pos + window_size).min(lower.len()),
+                    );
+                    let window = &lower[win_start..win_end];
+                    let co_occurrence =
+                        terms.iter().filter(|term| window.contains(*term)).count();
+                    (co_occurrence, pos)
+                })
+                .collect();
 
-                // Find where the body starts — after the closing "---" of the frontmatter.
-                // This prevents excerpts from anchoring at position 0 and showing
-                // the frontmatter block instead of the actual document content.
-                let body_start = content.find("\n---\n").map(|p| p + 5).unwrap_or(0);
+            // Sort highest co-occurrence first; break ties by position (earlier wins)
+            scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
 
-                // A document qualifies only if every query term matches (exactly or fuzzily)
-                if terms.iter().all(|term| fuzzy_word_match(&lower, term)) {
-                    let title =
-                        extract_frontmatter_field(&content, "title").unwrap_or_else(|| {
-                            path.file_stem().unwrap().to_string_lossy().to_string()
-                        });
-
-                    let resource =
-                        extract_frontmatter_field(&content, "resource").unwrap_or_default();
-
-                    // Collect byte positions of every exact match across all query terms,
-                    // searching only within the body (after frontmatter) so frontmatter
-                    // field values don't anchor the excerpt window
-                    let mut positions: Vec<usize> = terms
-                        .iter()
-                        .flat_map(|term| {
-                            lower[body_start..]
-                                .match_indices(*term)
-                                .map(|(pos, _)| pos + body_start)
-                        })
-                        .collect();
-                    positions.sort();
-                    positions.dedup();
-
-                    // Build the boilerplate set from the body and remove any position
-                    // that lands on a line appearing 3+ times (headers, footers, page titles).
-                    let exact_positions_before_filter = positions.len();
-                    let boilerplate = repeated_lines(&lower[body_start..]);
-                    let positions: Vec<usize> = positions
-                        .into_iter()
-                        .filter(|&pos| {
-                            !boilerplate.contains(&normalize_line(line_at_pos(&lower, pos)))
-                        })
-                        .collect();
-
-                    // Skip only when exact matches existed but ALL landed on boilerplate lines.
-                    // If exact_positions_before_filter is 0, this was a fuzzy-only match —
-                    // let it fall through to the body-start excerpt fallback below.
-                    if exact_positions_before_filter > 0 && positions.is_empty() {
-                        continue;
-                    }
-
-                    // Proximity scoring: rank each position by how many distinct query terms
-                    // appear within a ±500 char window around it. Positions where multiple
-                    // terms co-occur (e.g. "mission" + "command" + "payload" together) score
-                    // higher than isolated hits in page headers or table-of-contents lines.
-                    let window_size = 500_usize;
-                    let mut scored: Vec<(usize, usize)> = positions
-                        .iter()
-                        .map(|&pos| {
-                            // floor/ceil snap to nearest valid UTF-8 char boundary before slicing
-                            let win_start = floor_char_boundary(
-                                &lower,
-                                pos.saturating_sub(window_size).max(body_start),
-                            );
-                            let win_end = ceil_char_boundary(
-                                &lower,
-                                (pos + window_size).min(lower.len()),
-                            );
-                            let window = &lower[win_start..win_end];
-                            let co_occurrence =
-                                terms.iter().filter(|term| window.contains(*term)).count();
-                            (co_occurrence, pos)
-                        })
-                        .collect();
-
-                    // Sort highest co-occurrence first; break ties by position (earlier wins)
-                    scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-
-                    // Build up to 3 non-overlapping excerpt windows from highest-scoring positions
-                    let mut excerpts: Vec<&str> = Vec::new();
-                    let mut covered: Vec<(usize, usize)> = Vec::new();
-                    for (_, pos) in &scored {
-                        let pos = *pos;
-                        // Skip if this position falls inside an already-emitted window
-                        if covered.iter().any(|&(s, e)| pos >= s && pos < e) {
-                            continue;
-                        }
-                        let start = floor_char_boundary(
-                            &content,
-                            pos.saturating_sub(150).max(body_start),
-                        );
-                        let end = ceil_char_boundary(&content, (pos + 300).min(content.len()));
-                        excerpts.push(content[start..end].trim());
-                        covered.push((start, end));
-                        if excerpts.len() >= 3 {
-                            break;
-                        }
-                    }
-
-                    // Fall back to the start of the body (not the file) if all matches were fuzzy-only
-                    if excerpts.is_empty() {
-                        let end = (body_start + 400).min(content.len());
-                        excerpts.push(content[body_start..end].trim());
-                    }
-
-                    // Score = filtered exact match positions; boilerplate hits excluded.
-                    let score = positions.len();
-
-                    results.push((
-                        score,
-                        format!(
-                            "• {title}\n  Source: {resource}\n\n  ...{}...",
-                            excerpts.join("\n\n  ...")
-                        ),
-                    ));
+            // Build up to 3 non-overlapping excerpt windows from highest-scoring positions
+            let mut excerpts: Vec<&str> = Vec::new();
+            let mut covered: Vec<(usize, usize)> = Vec::new();
+            for (_, pos) in &scored {
+                let pos = *pos;
+                // Skip if this position falls inside an already-emitted window
+                if covered.iter().any(|&(s, e)| pos >= s && pos < e) {
+                    continue;
+                }
+                let start = floor_char_boundary(
+                    &doc.content,
+                    pos.saturating_sub(150).max(body_start),
+                );
+                let end = ceil_char_boundary(&doc.content, (pos + 300).min(doc.content.len()));
+                excerpts.push(doc.content[start..end].trim());
+                covered.push((start, end));
+                if excerpts.len() >= 3 {
+                    break;
                 }
             }
+
+            // Fall back to the start of the body (not the file) if all matches were fuzzy-only
+            if excerpts.is_empty() {
+                let end = (body_start + 400).min(doc.content.len());
+                excerpts.push(doc.content[body_start..end].trim());
+            }
+
+            // Score = filtered exact match positions; boilerplate hits excluded.
+            let score = positions.len();
+
+            results.push((
+                score,
+                format!(
+                    "• {}\n  Source: {}\n\n  ...{}...",
+                    doc.title,
+                    doc.resource,
+                    excerpts.join("\n\n  ...")
+                ),
+            ));
         }
     }
 
@@ -346,6 +340,26 @@ mod integration_tests {
         let result = search_docs_in(temp_dir.path(), "hydraulic pump".to_string()).unwrap();
         let output = format!("{:?}", result);
         assert!(output.contains("No results found"), "Unrelated query should return no results");
+    }
+
+    #[test]
+    fn search_reports_error_for_missing_bundle_dir() {
+        // A missing knowledge directory must surface as a tool error, not as
+        // "No results found" — that distinction is the whole point of load_bundle.
+        let result = search_docs_in(
+            std::path::Path::new("no-such-directory-anywhere"),
+            "reflector".to_string(),
+        )
+        .unwrap();
+        let output = format!("{:?}", result);
+        assert!(
+            output.contains("Cannot read knowledge bundle"),
+            "missing dir should be reported as a bundle error"
+        );
+        assert!(
+            !output.contains("No results found"),
+            "missing dir must not masquerade as an empty result set"
+        );
     }
 
     #[test]

@@ -4,8 +4,7 @@
 // and the stdio transport.
 
 use anyhow::Result;
-use mcp_server::bundle::{knowledge_dir, list_docs_in};
-use mcp_server::frontmatter::extract_frontmatter_field;
+use mcp_server::bundle::{knowledge_dir, list_docs_in, load_bundle, resource_stem_is_safe};
 use mcp_server::search::search_docs_in;
 use rmcp::{
     // MCP SDK types: error type, server trait, service wiring, tool routing machinery,
@@ -102,32 +101,27 @@ impl ServerHandler for KukaServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
-        let knowledge_dir = knowledge_dir();
-        let mut resources: Vec<Resource> = Vec::new();
+        // One loader for the whole bundle (bundle.rs). A missing directory is
+        // reported as a protocol error instead of silently listing nothing.
+        let docs = load_bundle(&knowledge_dir()).map_err(|e| McpError {
+            code: ErrorCode::INTERNAL_ERROR,
+            message: format!("Cannot read knowledge bundle: {e:#}").into(),
+            data: None,
+        })?;
 
-        if let Ok(entries) = std::fs::read_dir(&knowledge_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                    continue;
+        let resources: Vec<Resource> = docs
+            .into_iter()
+            .map(|doc| {
+                let uri = format!("kuka://docs/{}", doc.stem);
+                let mut raw = RawResource::new(uri, doc.stem)
+                    .with_title(doc.title)
+                    .with_mime_type("text/markdown".to_string());
+                if let Some(desc) = doc.description {
+                    raw = raw.with_description(desc);
                 }
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-                    let title = extract_frontmatter_field(&content, "title")
-                        .unwrap_or_else(|| stem.clone());
-                    let description = extract_frontmatter_field(&content, "description");
-                    let uri = format!("kuka://docs/{stem}");
-
-                    let mut raw = RawResource::new(uri, stem)
-                        .with_title(title)
-                        .with_mime_type("text/markdown".to_string());
-                    if let Some(desc) = description {
-                        raw = raw.with_description(desc);
-                    }
-                    resources.push(Annotated::new(raw, None));
-                }
-            }
-        }
+                Annotated::new(raw, None)
+            })
+            .collect();
 
         Ok(ListResourcesResult::with_all_items(resources))
     }
@@ -145,6 +139,16 @@ impl ServerHandler for KukaServer {
             message: format!("Unknown resource URI: {uri}").into(),
             data: None,
         })?;
+
+        // Path-traversal guard: a stem like "../../secret" would escape the
+        // knowledge directory when joined below. Only plain stems are valid.
+        if !resource_stem_is_safe(stem) {
+            return Err(McpError {
+                code: ErrorCode::RESOURCE_NOT_FOUND,
+                message: format!("Invalid resource URI: {uri}").into(),
+                data: None,
+            });
+        }
 
         let path = knowledge_dir().join(format!("{stem}.md"));
         let content = std::fs::read_to_string(&path).map_err(|_| McpError {
