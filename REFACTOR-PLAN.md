@@ -55,7 +55,8 @@ cargo is not installed on the Windows host.
 | 5b | inverted index, seek excerpts, reload_docs | complete | PR #6 merged (4732155); lessons refactor-09, refactor-10 |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
 | 6 | clean extraction + agent steering (post-plan) | complete | PR #9 merged (e601cb3, after the #8 stacked-merge mishap); lesson refactor-11 |
-| 7 | zone-based boilerplate detection (data-loss fix) | in progress | started 2026-07-05, branch refactor/step-7-zone-boilerplate |
+| 7 | zone-based boilerplate detection (data-loss fix) | in progress | PR #10 open, awaiting user merge |
+| 8 | OCR ingestion for image-based PDFs | not started | NEXT STEP (user request 2026-07-05) — see §8 |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -265,6 +266,24 @@ repeats too. Repetition is not identity; POSITION is the discriminator.
 - Verified live: "RobotType robot family code" returns the complete table
   in the excerpt; "RobotType valid values" returns the retry hint (honest —
   those words are absent), demonstrating steps 6+7 composing.
+
+## Step 8 — OCR ingestion for image-based PDFs (NEXT STEP, user-requested 2026-07-05)
+
+Goal: make image-based PDFs searchable — documents exported from PowerPoint
+and similar render their text as images, so pdftotext gets nothing. Concrete
+acceptance test: the user can ask questions about EmergencyFireAlarm.pdf
+(currently refused by extract with "no text could be extracted").
+
+Suggested approach (design when starting, per protocol ask user first):
+- Preprocess with ocrmypdf (Tesseract-based; adds a text layer to the PDF,
+  after which the EXISTING pipeline works unchanged — cleanest option), OR
+  have extract.rs fall back to invoking OCR when both extractors yield
+  nothing, mirroring the existing pdftotext fallback pattern.
+- Install tesseract-ocr + ocrmypdf in the devcontainer (postCreateCommand).
+- Keep provenance honest: tag OCR'd docs in frontmatter (e.g. tags: [ocr])
+  since OCR text can contain recognition errors; the fuzzy matcher already
+  tolerates 1-2 char errors, which helps.
+- Verify: re-extract EmergencyFireAlarm.pdf, live query about its content.
 
 ## Step 5c — Escape hatch (designed in, not built)
 
