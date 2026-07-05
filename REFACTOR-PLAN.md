@@ -54,6 +54,7 @@ cargo is not installed on the Windows host.
 | 5a | chunking in extract | complete | PR #5 merged (a6a813e); lesson refactor-08 |
 | 5b | inverted index, seek excerpts, reload_docs | complete | PR #6 merged (4732155); lessons refactor-09, refactor-10 |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
+| 6 | clean extraction + agent steering (post-plan) | in progress | PR #8 merged into its stale base and never reached master; restored + portable-steering additions in follow-up PR |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -216,6 +217,29 @@ Server integration:
 - list_docs / list_resources read index.docs (no disk).
 - New `reload_docs` tool rebuilds on demand (no file watching). Rebuild of
   hundreds of chunked docs ≪ 1s, so no index persistence yet.
+
+## Step 6 — Clean extraction + agent steering (added post-plan)
+
+Driven by a real agent failure: a session asked "minimum safe distance for a
+KMP 1500P", got TOC-anchored excerpts, gave up on search_docs, and fell back
+to reading source PDFs / browsing resources. Three server defects invited it:
+
+- **Excerpts anchored on TOC lines** (dot leaders co-occur every query term
+  and sit earliest in the file). Fix: `clean_extracted_text` in chunk.rs —
+  extract strips repeated header/footer lines AND TOC dot-leader lines
+  before chunking, so bundle files themselves are clean (index-time filter
+  retained as defense for hand-written files). Also `pdftotext -layout`
+  for readable tables.
+- **Hits displayed the source-PDF path** (an invitation to open files, and a
+  dangling pointer in production). Fix: SearchHit carries `stem`; hits show
+  `Resource: kuka://docs/{stem}` — the actionable escalation. Tool output
+  never contains file paths (pinned by test).
+- **No workflow guidance for agents.** Fix: search_docs description +
+  get_info instructions encode "search first → retry terms → read the hit's
+  resource URI; never source files"; CLAUDE.md added for coding sessions.
+
+Roadmap noted here: DOCX/PPTX ingestion via pandoc (next capability);
+Docling/marker for table-heavy PDFs; ocrmypdf for scans.
 
 ## Step 5c — Escape hatch (designed in, not built)
 
@@ -393,3 +417,38 @@ Newest entry last. Every status change in the dashboard gets a line here.
   known follow-ups, none urgent: EmergencyFireAlarm.pdf needs OCR to be
   indexable; ranking could add the IDF half of TF-IDF; index
   persistence only matters at much larger corpus scale.
+- 2026-07-05 — STEP 6 implemented on branch
+  refactor/step-6-clean-extraction (stacked on docs/user-manual, so its
+  PR shows base = docs/user-manual until PR #7 merges). Scope in §6
+  above. Code: clean_extracted_text + 4 tests in chunk.rs (gotcha
+  found: str::lines() doesn't split on \x0c, so page breaks are mapped
+  to \n before repetition counting); extract.rs cleans before chunking
+  + pdftotext -layout; SearchHit.resource → SearchHit.stem; format_hit
+  emits Resource: kuka://docs/{stem}; sharpened search_docs description
+  + get_info workflow instructions; CLAUDE.md added. 46/46 tests
+  (40 lib + 6 bin), clippy clean. Bundle re-extracted (files now clean;
+  chunk boundaries shifted slightly due to -layout); debug binary
+  rebuilt (client config points at it). Live verify of the exact
+  failing query: excerpts anchor on real content incl. readable table
+  rows, resource URI shown, no .pdf paths in output. Docs updated:
+  USER-MANUAL (capabilities, extraction/cleaning, other-formats
+  section, results-reading section, tools table), lessons refactor-08
+  and refactor-09 got update notes, new lesson refactor-11
+  (clean extraction + agent steering). PR opened; step complete when
+  user merges (after #7).
+- 2026-07-05 — STEP 6 MERGE MISHAP + RESTORATION + ADDITIONS. PR #8 was
+  stacked on PR #7 (base = docs/user-manual). The user merged #7 first
+  and #8 second — but #8 merged into the docs/user-manual BRANCH, whose
+  content had already been copied to master, so step 6 never reached
+  master (GitHub shows #8 as MERGED regardless). LESSON FOR STACKED
+  PRs: after the bottom PR merges, confirm GitHub retargeted the upper
+  PR's base to master BEFORE merging it. Recovery: step-6 commit
+  53a4973 restored from the local repo and rebased onto master as
+  1f81396 on branch refactor/step-6-clean-extraction. Added on top
+  (user-approved): (1) the no-results message now carries in-band retry
+  guidance ("All search terms must match — try again with fewer or
+  different terms") — tool output is the only steering channel that
+  reaches EVERY harness (Codex etc.), unlike instructions/CLAUDE.md;
+  (2) AGENTS.md mirroring CLAUDE.md for non-Claude coding harnesses,
+  with cross-references to keep the two in sync. New PR opened against
+  master; step 6 complete when it merges.

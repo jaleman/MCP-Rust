@@ -1,4 +1,5 @@
-// Splitting extracted document text into chunk-sized pieces along page
+// Preparing extracted document text for the knowledge bundle: cleaning out
+// non-content lines, then splitting into chunk-sized pieces along page
 // boundaries. pdftotext separates pages with a form-feed character (\x0c),
 // which gives us accurate section boundaries for free; pages are accumulated
 // until a chunk reaches the target size.
@@ -8,6 +9,46 @@
 // OKF file per chunk keeps every downstream consumer simple, and page-range
 // provenance ("pages 12-18 of the manual") makes search results MORE useful,
 // not less.
+//
+// Why clean at EXTRACT time (not query time): if repeated headers/footers and
+// table-of-contents lines never reach the bundle files, then excerpts,
+// resources, and every future consumer are clean — not just search anchoring.
+
+use crate::search::{normalize_line, repeated_lines};
+
+/// A line containing a run of dots this long is a table-of-contents entry
+/// ("Introduction ........... 3") — navigation, not content. TOC lines are
+/// especially harmful in search results: they contain every section title
+/// packed close together, so they outscore the real content they point at.
+const TOC_DOT_RUN: &str = ".....";
+
+/// Cleans raw extracted text before chunking: strips repeated header/footer
+/// lines (running titles, "Page N of M", classification banners) and TOC
+/// dot-leader lines, while preserving page boundaries (\x0c) and blank lines
+/// (paragraph structure).
+pub fn clean_extracted_text(text: &str) -> String {
+    // Repetition is counted across the WHOLE document — a header only counts
+    // as boilerplate because it appears on many pages. Page breaks (\x0c) are
+    // treated as line breaks for counting; otherwise a header that directly
+    // follows a page break would merge into the previous line and escape the
+    // count (str::lines only splits on \n).
+    let boilerplate = repeated_lines(&text.replace('\x0c', "\n"));
+
+    text.split('\x0c')
+        .map(|page| {
+            page.lines()
+                .filter(|line| {
+                    let norm = normalize_line(line);
+                    // Blank lines carry paragraph structure — always keep
+                    norm.is_empty()
+                        || (!boilerplate.contains(&norm) && !line.contains(TOC_DOT_RUN))
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\x0c")
+}
 
 /// Target chunk size. Big enough for coherent context, small enough that an
 /// agent can read several hits without flooding its context window.
@@ -122,6 +163,45 @@ fn split_oversized_page(page: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- clean_extracted_text ---
+
+    #[test]
+    fn clean_strips_repeated_headers_and_keeps_content() {
+        let text = "KUKA ROBOTICS CORP.\nReal content about reflectors.\x0c\
+                    KUKA ROBOTICS CORP.\nMore real content.\x0c\
+                    KUKA ROBOTICS CORP.\nFinal page content.";
+        let cleaned = clean_extracted_text(text);
+        assert!(!cleaned.contains("KUKA ROBOTICS CORP."), "repeated header must be stripped");
+        assert!(cleaned.contains("Real content about reflectors."));
+        assert!(cleaned.contains("Final page content."));
+    }
+
+    #[test]
+    fn clean_strips_toc_dot_leader_lines() {
+        let text = "Contents\nIntroduction ................... 3\n\
+                    Minimum Safe Distances ........ 5\n\nReal introduction text.";
+        let cleaned = clean_extracted_text(text);
+        assert!(!cleaned.contains("..........."), "TOC dot leaders must be stripped");
+        assert!(!cleaned.contains("Minimum Safe Distances ........"));
+        assert!(cleaned.contains("Real introduction text."));
+    }
+
+    #[test]
+    fn clean_preserves_page_boundaries_and_blank_lines() {
+        let text = "Header\nPage one text.\n\nSecond paragraph.\x0cHeader\nPage two text.\x0cHeader\nPage three.";
+        let cleaned = clean_extracted_text(text);
+        // "Header" repeats 3× → stripped, but the form feeds must survive
+        assert_eq!(cleaned.matches('\x0c').count(), 2, "page separators must be preserved");
+        assert!(cleaned.contains("\n\n"), "blank lines (paragraph structure) must survive");
+    }
+
+    #[test]
+    fn clean_keeps_lines_appearing_fewer_than_three_times() {
+        let text = "Unique heading\nBody text here.\x0cAnother unique heading\nMore body.";
+        let cleaned = clean_extracted_text(text);
+        assert!(cleaned.contains("Unique heading"), "non-repeated lines are content");
+    }
 
     // Builds a fake N-page document where each page has the given size.
     fn pages_of(sizes: &[usize]) -> String {

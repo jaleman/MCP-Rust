@@ -38,6 +38,13 @@
     parsing.
   </p>
 
+  <p class="note">
+    <em>Update (step 6):</em> the extraction pipeline now <strong>cleans</strong> the text
+    before chunking — repeated headers/footers and table-of-contents lines are
+    stripped so they never reach the bundle files. See
+    <a href="refactor-11-clean-extraction-and-agent-steering.html">Refactor Appendix 11</a>.
+  </p>
+
   <h2>The accumulator pattern</h2>
 
   <p>

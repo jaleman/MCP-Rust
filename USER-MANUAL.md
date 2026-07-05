@@ -43,6 +43,9 @@ with page-level references back to the source PDFs.
 - **Page-level provenance**: results from large documents are titled with
   their page range, e.g. *"MQTT Payload Definitions (pages 9–16)"*, so you
   can find the passage in the original PDF.
+- **Clean extraction**: repeated page headers/footers and table-of-contents
+  lines are stripped at extraction time, and tables keep their layout — so
+  search results show content, not navigation noise.
 - **Document listing and full-document reading** via MCP resources.
 - **Live reload**: add or re-extract documents and refresh the index without
   restarting the server.
@@ -68,11 +71,13 @@ kuka-docs/*.pdf ──────────────────▶  knowl
                  ~8 KB page chunking  OKF frontmatter           + MCP tools
 ```
 
-1. **Extraction**: `extract` pulls the text out of each PDF and writes it as
-   markdown files with a metadata header (the *OKF frontmatter*: title, type,
-   source PDF, timestamp). Documents larger than ~8 KB are split into chunks
-   on page boundaries, one file per chunk, so every unit is small enough for
-   an AI agent to read comfortably.
+1. **Extraction**: `extract` pulls the text out of each PDF, cleans it
+   (repeated page headers/footers and table-of-contents lines are stripped —
+   they are navigation, not knowledge), and writes it as markdown files with
+   a metadata header (the *OKF frontmatter*: title, type, source PDF,
+   timestamp). Documents larger than ~8 KB are split into chunks on page
+   boundaries, one file per chunk, so every unit is small enough for an AI
+   agent to read comfortably.
 2. **Indexing**: at startup, `mcp-server` reads every bundle file once and
    builds an inverted index (term → documents and positions). Repeated
    headers and footers are filtered out at this stage so they never pollute
@@ -182,12 +187,30 @@ Done: 9 extracted, 1 failed.
   split into page-ranged chunks (`-p009-016` = pages 9–16). Each chunk knows
   its parent document and page range, which is how search results get their
   page provenance.
+- The text is **cleaned automatically**: repeated page headers/footers and
+  table-of-contents dot-leader lines are stripped, and tables are extracted
+  with layout preserved (`pdftotext -layout`) so their rows stay readable.
 - A failure like `no text could be extracted (image-only or empty PDF?)`
   means the PDF has no text layer (it's a scan). OCR it first, or accept
   that it won't be searchable. One bad PDF never aborts the batch.
 - Re-running extraction over the same folder simply regenerates the files —
   it is safe and idempotent. A warning is printed only if two *different*
   PDFs would collide on the same output name.
+
+### Other document formats (DOCX, PPTX, …)
+
+The extractor takes PDFs as input today, but the server doesn't care where
+bundle files come from — **anything in OKF markdown is indexed and served**
+(see the Appendix for the format). For other formats, until built-in support
+lands, either:
+
+- convert to markdown with **pandoc** (`pandoc report.docx -t gfm`), add the
+  OKF frontmatter header, and drop the file into the bundle; or
+- write bundle files by hand for content that never existed as a document
+  (FAQs, procedures, tribal knowledge).
+
+Run `reload_docs` (Section 8) after adding files either way. Native
+DOCX/PPTX ingestion via pandoc is on the roadmap (see REFACTOR-PLAN.md).
 
 ---
 
@@ -287,7 +310,7 @@ absorbs one or two letter errors in words of four letters or more.
 
 | Tool | What it does | Example phrasing |
 |------|--------------|------------------|
-| `search_docs` | Ranked full-text search; returns up to 3 excerpts per matching document | "search the KUKA docs for battery charging" |
+| `search_docs` | Ranked full-text search; returns up to 3 excerpts per matching document, each hit with a `kuka://docs/…` resource URI for reading the full section | "search the KUKA docs for battery charging" |
 | `list_docs` | Lists every document in the bundle, grouped by type | "what KUKA documents do you have?" |
 | `reload_docs` | Rebuilds the search index from the bundle directory | "reload the KUKA docs" |
 | `ping` | Health check | "is the KUKA server running?" |
@@ -307,7 +330,7 @@ Chunks are ~8 KB by design, so a whole one always fits comfortably.
 Found 2 result(s) for 'mission status':
 
 • KUKA Technical Note-MQTT Payload Definitions_Ver1.1.9 (pages 9-16)
-  Source: kuka-docs/KUKA Technical Note-MQTT Payload Definitions_Ver1.1.9.pdf
+  Resource: kuka://docs/kuka-technical-note-mqtt-payload-definitions_ver119-p009-016
 
   ...Mission Status Payload
   Message to inform the customer of mission status. ...
@@ -319,8 +342,12 @@ Found 2 result(s) for 'mission status':
 - **All terms must match** (after stop-word removal). No results usually
   means one of your words appears nowhere in the bundle — drop or replace
   the rarest word and retry.
-- The `(pages N–M)` suffix and the `Source:` line point you to the exact
-  place in the original PDF.
+- The `(pages N–M)` suffix in the title points you to the exact place in
+  the original PDF (the source PDF's name is recorded in the bundle file's
+  frontmatter).
+- The `Resource:` line is the follow-up step: if the excerpts don't contain
+  the full answer, that URI reads the whole section. Tool output never
+  contains source-file paths — agents work entirely through the server.
 
 ---
 

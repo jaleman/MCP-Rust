@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use mcp_server::chunk::{Chunk, chunk_pages};
+use mcp_server::chunk::{Chunk, chunk_pages, clean_extracted_text};
 use mcp_server::frontmatter::OkfFrontmatter; // shared OKF format — same module the server parses with
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -96,6 +96,7 @@ fn main() {
 // The `-` argument tells pdftotext to write to stdout instead of a file.
 fn try_pdftotext(pdf_path: &Path) -> Result<String> {
     let output = std::process::Command::new("pdftotext")
+        .arg("-layout") // preserve columnar layout — tables stay readable
         .arg(pdf_path)
         .arg("-") // "-" means: write output to stdout
         .output()
@@ -151,6 +152,11 @@ fn process_pdf(
     let resource = format!("kuka-docs/{filename}");
     // Real extraction time — files used to carry a hardcoded date
     let timestamp = jiff::Timestamp::now().to_string();
+
+    // Strip repeated headers/footers and TOC dot-leader lines BEFORE chunking
+    // so the bundle files themselves are clean — excerpts, resources, and any
+    // future consumer benefit, not just search anchoring.
+    let text = clean_extracted_text(&text);
 
     let chunks = chunk_pages(text.trim());
 
