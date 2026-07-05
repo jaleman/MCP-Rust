@@ -55,6 +55,7 @@ cargo is not installed on the Windows host.
 | 5b | inverted index, seek excerpts, reload_docs | complete | PR #6 merged (4732155); lessons refactor-09, refactor-10 |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
 | 6 | clean extraction + agent steering (post-plan) | complete | PR #9 merged (e601cb3, after the #8 stacked-merge mishap); lesson refactor-11 |
+| 7 | zone-based boilerplate detection (data-loss fix) | in progress | started 2026-07-05, branch refactor/step-7-zone-boilerplate |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -240,6 +241,30 @@ to reading source PDFs / browsing resources. Three server defects invited it:
 
 Roadmap noted here: DOCX/PPTX ingestion via pandoc (next capability);
 Docling/marker for table-heavy PDFs; ocrmypdf for scans.
+
+## Step 7 — Zone-based boilerplate detection (data-loss fix, added post-plan)
+
+Driven by a real data-loss report: the RobotType lookup table (printed under
+THREE payload sections in the MQTT Payload Definitions doc) vanished from the
+bundle. Another session mis-diagnosed it as an image needing OCR; two greps
+proved pdftotext extracts it fine and OUR cleaner deleted it. Root cause: the
+step-6 rule "any line repeated ≥3× is a header" — but legitimate content
+repeats too. Repetition is not identity; POSITION is the discriminator.
+
+- `clean_extracted_text` rewritten: a line is boilerplate only if it repeats
+  ≥3× AND ≥80% of its occurrences fall in page-edge zones (top 10 / bottom 5
+  lines of a page). Mid-page repeated content survives. "Page N of M"
+  markers (unique per page — repetition can never catch them) are matched by
+  shape via slice patterns.
+- The index-time repeated-lines filter was REMOVED (not softened): chunks
+  have no page structure, so it cannot be made position-aware, and it would
+  re-hide the table whenever a chunk contains it 3×. Principle: each
+  data-quality rule lives at exactly one stage — the earliest with the
+  information it needs. Index::build simplified to one tokenize pass;
+  repeated_lines/BOILERPLATE_MIN_REPEATS deleted from search.rs.
+- Verified live: "RobotType robot family code" returns the complete table
+  in the excerpt; "RobotType valid values" returns the retry hint (honest —
+  those words are absent), demonstrating steps 6+7 composing.
 
 ## Step 5c — Escape hatch (designed in, not built)
 
@@ -459,3 +484,23 @@ Newest entry last. Every status change in the dashboard gets a line here.
   complete; deferred items unchanged (5c escape hatch, IDF ranking,
   index persistence, OCR for EmergencyFireAlarm.pdf, pandoc DOCX/PPTX
   ingestion as next capability).
+- 2026-07-05 — STEP 7 implemented on branch
+  refactor/step-7-zone-boilerplate (scope in §7 above). chunk.rs:
+  zone-based clean_extracted_text (3-pass: count + zone stats →
+  classify → filter) + is_page_marker slice-pattern matcher + new tests
+  incl. the RobotType scenario (repeated mid-page table survives all 3
+  sections) and page-marker shape matching. index.rs: repeated-lines
+  filter removed, build simplified to single tokenize pass, tests
+  rewritten to the trust-the-bundle contract (incl. end-to-end
+  clean→index test). search.rs: repeated_lines +
+  BOILERPLATE_MIN_REPEATS deleted; normalize_line retained for the
+  cleaner. 47/47 tests, clippy clean. Bundle re-extracted: 250P now
+  present 3× in mqtt p009-015 chunk; debug binary rebuilt. Live:
+  "RobotType robot family code" → full table in excerpt with resource
+  URI; "RobotType valid values" → retry hint. Docs updated:
+  USER-MANUAL (capabilities, pipeline, extraction bullets — position-
+  aware wording, index "trusts the bundle"), refactor-09 and
+  refactor-11 update notes corrected, new lesson
+  refactor-12-repetition-is-not-identity. NOTE: a mid-command container
+  restart produced one exit-137; harmless, container came back up.
+  PR opened against master; step complete when user merges.

@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 12: Repetition Is Not Identity — When Cleaning Eats the Data</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 12</div>
+    <h1>Repetition Is Not Identity — When Cleaning Eats the Data</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 7 — a data-loss bug in our own cleaner</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The incident</h2>
+
+  <p>
+    A user asked: <em>"what are valid values for RobotType?"</em> The MQTT Payload
+    Definitions PDF contains a clean lookup table (0 = KMP 250P, 1 = KMP 600P, …
+    5 = KMF CB-1500P). Search found nothing. A Claude session investigated and
+    concluded the table must be <em>an image inside the PDF</em>, needing OCR.
+  </p>
+
+  <p>
+    That diagnosis was plausible, confident — and wrong. One command disproved it:
+  </p>
+
+  <pre><code>$ pdftotext -layout "MQTT Payload Definitions.pdf" - | grep -n "250P"
+350:    0                     KMP 250P     ← the table IS text…
+436: 0                           KMP 250P  ← …and appears 3 times
+524: 0                           KMP 250P
+
+$ grep -l "250P" knowledge/*.md
+(nothing)                                 ← but never reached the bundle</code></pre>
+
+  <p>
+    The table was extracted perfectly and then <strong>deleted by our own
+    cleaner</strong>. Debugging moral #1: before accepting a story about why data
+    is missing ("it's an image", "it needs OCR"), check each pipeline stage for
+    where it actually disappears. The evidence took two greps.
+  </p>
+
+  <h2>The flawed rule</h2>
+
+  <p>
+    The step-6 cleaner classified any line repeated ≥ 3 times as a running
+    header/footer. But the RobotType table is printed under <em>three</em>
+    payload sections — MissionCommand, MultiMissionCommand, MultiWorkflowCommand —
+    so every one of its lines "repeated 3 times" and was stripped. So was the
+    <code>RobotType: (optional)…</code> description sentence, and every other
+    standard sentence that legitimately recurs under each payload definition.
+    The user's report — "quite a bit of data missing for the MissionCommand
+    payload" — was precisely this rule at work.
+  </p>
+
+  <p>
+    The false assumption: <strong>repetition identifies boilerplate.</strong>
+    It doesn't. Real documents repeat content on purpose. What actually
+    distinguishes a running header is <em>where</em> it repeats: at the edges of
+    pages. In machine-learning terms, we were classifying on one feature
+    (frequency) when the discriminating feature is position.
+  </p>
+
+  <h2>The fix: position-aware (zone-based) detection</h2>
+
+  <pre><code>const HEADER_ZONE_LINES: usize = 10;   // top-of-page candidate zone
+const FOOTER_ZONE_LINES: usize = 5;    // bottom-of-page candidate zone
+
+// Pass 1: count, per normalized line, total occurrences AND how many
+//         fall inside a page-edge zone.
+// Pass 2: boilerplate = repeats >= 3  AND  >= 80% of occurrences in zones.
+// Pass 3: rebuild the text without boilerplate / page markers / TOC lines.</code></pre>
+
+  <p>
+    <code>KUKA ROBOTICS CORP.</code> (24 occurrences, all page-top) is still
+    stripped. The RobotType table (3 occurrences, all mid-page) survives. The
+    80% zone-share tolerance means content that once drifts to a page top —
+    a section that happens to start right after a page break — doesn't get
+    misclassified from a single occurrence. And since "Page 8 of 24" is unique
+    per page (repetition can never catch it), page markers are now matched by
+    <em>shape</em> instead: a small <code>match</code> on the word pattern
+    <code>["page", n, "of", m]</code> — Rust slice patterns doing the work a
+    regex would do in Java, without the dependency.
+  </p>
+
+  <h2>The index filter had to go too</h2>
+
+  <p>
+    <a href="refactor-09-inverted-index.html">Appendix 9</a> proudly filtered
+    repeated lines at index-build time. Same flaw — and worse, it is
+    <em>unfixable</em> there: by the time the index sees a chunk, page breaks
+    are gone, so position-aware detection is impossible. Had we kept it, a chunk
+    containing the table three times would silently un-index it again. It was
+    removed entirely, which also simplified <code>Index::build</code> from a
+    line-walking loop back to a single <code>tokenize(doc.body())</code> pass.
+  </p>
+
+  <p>
+    The design principle that fell out: <strong>each data-quality rule lives at
+    exactly one stage — the earliest stage that has the information the rule
+    needs.</strong> Boilerplate detection needs page structure → it lives in
+    extraction, and nowhere else. "Defense in depth" sounds prudent, but a
+    duplicate filter with less information than the primary one isn't defense —
+    it's a second chance to destroy data.
+  </p>
+
+  <h2>A test that failed correctly</h2>
+
+  <p>
+    The new test for "repeated mid-page content survives" failed on first run —
+    and the failure was the algorithm being <em>right</em>: the synthetic page was
+    so short that the table sat within 5 lines of the page bottom, i.e. inside
+    the footer zone, where stripping is intended. The fix was to make the fixture
+    honest (add closing text below the table, as the real document has), not to
+    weaken the algorithm. When a test fails, "which one is wrong?" is a genuine
+    question — here the test was, and understanding why sharpened the zone
+    semantics.
+  </p>
+
+  <h2>The result</h2>
+
+  <pre><code>→ search_docs("RobotType robot family code")
+
+• KUKA Technical Note-MQTT Payload Definitions_Ver1.1.9 (pages 9-15)
+  Resource: kuka://docs/kuka-technical-note-mqtt-payload-definitions_ver119-p009-015
+
+  ...RobotType: (optional) robot family that can execute this mission...
+     Code                  Resource Family Type
+     0                     KMP 250P
+     1                     KMP 600P
+     2                     KMP 1500P
+     3                     KMP 3000P
+     4                     KMR IISY
+     5                     KMF CB-1500P...</code></pre>
+
+  <p>
+    The complete table, straight from the excerpt. And the query
+    <em>"RobotType valid values"</em> now returns the step-6 retry hint instead of
+    a bare "no results" — the two mechanisms compose: the hint prompts a
+    reworded query, and the reworded query finds the restored data.
+  </p>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Principle</th><th>Java world</th><th>This server</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>verify where data is lost before theorizing</td>
+        <td>trace each ETL stage; don't trust the first plausible story</td>
+        <td>two greps disproved the "it's an image / needs OCR" diagnosis</td>
+      </tr>
+      <tr>
+        <td>classify on the discriminating feature</td>
+        <td>frequency + position, not frequency alone</td>
+        <td>page-edge zones + repetition threshold</td>
+      </tr>
+      <tr>
+        <td>one rule, one stage, most information</td>
+        <td>validate at the boundary that still has the context</td>
+        <td>cleaning only at extract time; index filter deleted</td>
+      </tr>
+      <tr>
+        <td>pattern matching over regex for simple shapes</td>
+        <td><code>Pattern.compile("page \\d+ of \\d+")</code></td>
+        <td><code>match words[..] { ["page", n, "of", m] =&gt; … }</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "How do Rust slice patterns compare to regex for matching, and when is each right?",
+    "What other false-positive risks remain in zone-based detection?",
+    or "How would a coverage check (raw vs cleaned byte counts) catch this class of bug automatically?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-11-clean-extraction-and-agent-steering.html">← Refactor Appendix 11: Clean Extraction and Agent Steering</a>
+    <a href="refactor-09-inverted-index.html">← Related: Appendix 9, The Inverted Index</a>
+  </nav>
+
+</div>
+</body>
+</html>

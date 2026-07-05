@@ -14,7 +14,8 @@
 // table-of-contents lines never reach the bundle files, then excerpts,
 // resources, and every future consumer are clean — not just search anchoring.
 
-use crate::search::{normalize_line, repeated_lines};
+use crate::search::normalize_line;
+use std::collections::{HashMap, HashSet};
 
 /// A line containing a run of dots this long is a table-of-contents entry
 /// ("Introduction ........... 3") — navigation, not content. TOC lines are
@@ -22,32 +23,95 @@ use crate::search::{normalize_line, repeated_lines};
 /// packed close together, so they outscore the real content they point at.
 const TOC_DOT_RUN: &str = ".....";
 
-/// Cleans raw extracted text before chunking: strips repeated header/footer
-/// lines (running titles, "Page N of M", classification banners) and TOC
-/// dot-leader lines, while preserving page boundaries (\x0c) and blank lines
-/// (paragraph structure).
-pub fn clean_extracted_text(text: &str) -> String {
-    // Repetition is counted across the WHOLE document — a header only counts
-    // as boilerplate because it appears on many pages. Page breaks (\x0c) are
-    // treated as line breaks for counting; otherwise a header that directly
-    // follows a page break would merge into the previous line and escape the
-    // count (str::lines only splits on \n).
-    let boilerplate = repeated_lines(&text.replace('\x0c', "\n"));
+/// A repeated line must appear at least this often to be boilerplate.
+const BOILERPLATE_MIN_REPEATS: usize = 3;
 
-    text.split('\x0c')
+/// Header/footer candidate zones: only lines this close to the top or bottom
+/// of a page can be classified as boilerplate. Repetition alone is NOT enough
+/// — legitimate content repeats too (the same lookup table printed under
+/// several payload sections, standard sentences under every message type).
+/// What distinguishes a running header is WHERE it repeats: at page edges.
+const HEADER_ZONE_LINES: usize = 10;
+const FOOTER_ZONE_LINES: usize = 5;
+
+/// Of a line's occurrences, at least this fraction (4/5) must fall inside the
+/// page-edge zones for it to count as boilerplate. Content that merely drifts
+/// into a zone once (a section starting at the top of a page) stays safe.
+const ZONE_SHARE_NUM: usize = 4;
+const ZONE_SHARE_DEN: usize = 5;
+
+/// Cleans raw extracted text before chunking: strips running header/footer
+/// lines (repeated at page edges), "Page N of M" markers, and TOC dot-leader
+/// lines, while preserving page boundaries (\x0c) and blank lines (paragraph
+/// structure). Repeated MID-PAGE content is deliberately kept — stripping by
+/// repetition alone once deleted a legitimate lookup table that was printed
+/// under three different payload sections (the RobotType incident).
+pub fn clean_extracted_text(text: &str) -> String {
+    // Pass 1: for every normalized line, count total occurrences and how many
+    // fall inside a page-edge zone.
+    struct LineStats {
+        total: usize,
+        in_zone: usize,
+    }
+    let mut stats: HashMap<String, LineStats> = HashMap::new();
+
+    let pages: Vec<&str> = text.split('\x0c').collect();
+    for page in &pages {
+        let lines: Vec<&str> = page.lines().collect();
+        let line_count = lines.len();
+        for (i, line) in lines.iter().enumerate() {
+            let norm = normalize_line(line);
+            if norm.is_empty() {
+                continue;
+            }
+            let entry = stats.entry(norm).or_insert(LineStats { total: 0, in_zone: 0 });
+            entry.total += 1;
+            if i < HEADER_ZONE_LINES || i + FOOTER_ZONE_LINES >= line_count {
+                entry.in_zone += 1;
+            }
+        }
+    }
+
+    // Pass 2: boilerplate = repeats enough AND lives at the page edges.
+    let boilerplate: HashSet<String> = stats
+        .into_iter()
+        .filter(|(_, s)| {
+            s.total >= BOILERPLATE_MIN_REPEATS && s.in_zone * ZONE_SHARE_DEN >= s.total * ZONE_SHARE_NUM
+        })
+        .map(|(line, _)| line)
+        .collect();
+
+    // Pass 3: rebuild the text without boilerplate, page markers, or TOC lines.
+    pages
+        .iter()
         .map(|page| {
             page.lines()
                 .filter(|line| {
                     let norm = normalize_line(line);
                     // Blank lines carry paragraph structure — always keep
                     norm.is_empty()
-                        || (!boilerplate.contains(&norm) && !line.contains(TOC_DOT_RUN))
+                        || (!boilerplate.contains(&norm)
+                            && !is_page_marker(&norm)
+                            && !line.contains(TOC_DOT_RUN))
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
         })
         .collect::<Vec<_>>()
         .join("\x0c")
+}
+
+// "page 8 of 24" / "page 8" — page-number markers are unique per page, so
+// repetition can never catch them; match their shape instead. Deliberately
+// conservative: a real content sentence of exactly this form is implausible.
+fn is_page_marker(norm: &str) -> bool {
+    let words: Vec<&str> = norm.split_whitespace().collect();
+    let is_num = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit());
+    match words.as_slice() {
+        ["page", n] => is_num(n),
+        ["page", n, "of", m] => is_num(n) && is_num(m),
+        _ => false,
+    }
 }
 
 /// Target chunk size. Big enough for coherent context, small enough that an
@@ -201,6 +265,56 @@ mod tests {
         let text = "Unique heading\nBody text here.\x0cAnother unique heading\nMore body.";
         let cleaned = clean_extracted_text(text);
         assert!(cleaned.contains("Unique heading"), "non-repeated lines are content");
+    }
+
+    #[test]
+    fn clean_keeps_repeated_mid_page_content() {
+        // The RobotType incident: a lookup table legitimately printed under
+        // THREE different payload sections. It repeats — but MID-PAGE, not at
+        // page edges — so it must survive cleaning. (An earlier version
+        // stripped anything repeated 3+, deleting this exact table.)
+        // The table must sit MID-PAGE: below the header zone (10 lines) and
+        // above the footer zone (5 lines) — as it does in the real document.
+        let top: String = (0..12).map(|i| format!("Intro line {i}.\n")).collect();
+        let bottom: String = (0..6).map(|i| format!("Closing remark {i}.\n")).collect();
+        let page = |section: &str| {
+            format!(
+                "RUNNING HEADER\n{top}{section} payload details.\n\
+                 Code   Resource Family Type\n0   KMP 250P\n1   KMP 600P\n5   KMF CB-1500P\n\
+                 {bottom}"
+            )
+        };
+        let text = format!(
+            "{}\x0c{}\x0c{}",
+            page("MissionCommand"),
+            page("MultiMissionCommand"),
+            page("MultiWorkflowCommand")
+        );
+
+        let cleaned = clean_extracted_text(&text);
+        assert!(!cleaned.contains("RUNNING HEADER"), "page-edge repetition is still stripped");
+        assert_eq!(
+            cleaned.matches("KMP 250P").count(),
+            3,
+            "mid-page repeated content (the lookup table) must survive in ALL sections"
+        );
+        assert!(cleaned.contains("Code   Resource Family Type"));
+    }
+
+    #[test]
+    fn clean_strips_page_number_markers() {
+        // "Page N of M" is unique per page, so repetition can never catch it —
+        // it is matched by shape instead.
+        let text = "Real content on page one.\nPage 1 of 3\x0c\
+                    More real content.\nPage 2 of 3\x0c\
+                    Final content.\nPage 3 of 3";
+        let cleaned = clean_extracted_text(text);
+        assert!(!cleaned.contains("Page 1 of 3"));
+        assert!(!cleaned.contains("Page 3 of 3"));
+        assert!(cleaned.contains("Real content on page one."));
+        // But a sentence merely MENTIONING a page is not a marker
+        let text2 = "See the table on page 4 of this note for details.";
+        assert!(clean_extracted_text(text2).contains("page 4 of this note"));
     }
 
     // Builds a fake N-page document where each page has the given size.

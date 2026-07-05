@@ -89,6 +89,15 @@ pub fn clean_extracted_text(text: &amp;str) -&gt; String {
         .collect::&lt;Vec&lt;_&gt;&gt;().join("\x0c")
 }</code></pre>
 
+  <p class="note">
+    <em>Update (step 7):</em> repetition alone turned out to be the wrong test —
+    this version of the cleaner deleted a legitimate lookup table that was
+    printed under three payload sections. Boilerplate detection is now
+    <strong>position-aware</strong> (page-edge zones), and the index-time filter
+    mentioned below was removed entirely. The full story:
+    <a href="refactor-12-repetition-is-not-identity.html">Refactor Appendix 12</a>.
+  </p>
+
   <p>
     (The index-time filter from Appendix 9 stays as defense-in-depth for
     hand-written bundle files.) One bug the tests caught immediately:
