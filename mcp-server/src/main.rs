@@ -135,8 +135,14 @@ fn run_search(index: &Index, query: &str) -> CallToolResult {
 
     let hits = index.search(&terms);
 
+    // The no-results message carries its own retry guidance: tool OUTPUT is
+    // the one steering channel every harness passes to its model, so the
+    // hint works even on clients that ignore MCP instructions entirely.
     let text = if hits.is_empty() {
-        format!("No results found for '{query}'.")
+        format!(
+            "No results found for '{query}'. All search terms must match — \
+             try again with fewer or different terms."
+        )
     } else {
         let ranked: Vec<String> = hits.iter().map(format_hit).collect();
         format!(
@@ -407,7 +413,7 @@ Reflectors must be mounted at a height of 150 to 2000 mm above floor level.";
     }
 
     #[test]
-    fn search_tool_reports_no_results() {
+    fn search_tool_reports_no_results_with_retry_hint() {
         let temp_dir = bundle_with_one_doc();
         let server = server_over(&temp_dir);
         let result = server
@@ -415,7 +421,12 @@ Reflectors must be mounted at a height of 150 to 2000 mm above floor level.";
                 query: "hydraulic pump".to_string(),
             }))
             .unwrap();
-        assert!(result_text(&result).contains("No results found for 'hydraulic pump'"));
+        let text = result_text(&result);
+        assert!(text.contains("No results found for 'hydraulic pump'"));
+        // In-band steering: the retry guidance rides inside the tool result,
+        // so it reaches agents on ANY harness, not just clients that read
+        // MCP instructions.
+        assert!(text.contains("fewer or different terms"));
     }
 
     #[test]

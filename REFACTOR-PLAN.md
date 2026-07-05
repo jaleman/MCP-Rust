@@ -54,7 +54,7 @@ cargo is not installed on the Windows host.
 | 5a | chunking in extract | complete | PR #5 merged (a6a813e); lesson refactor-08 |
 | 5b | inverted index, seek excerpts, reload_docs | complete | PR #6 merged (4732155); lessons refactor-09, refactor-10 |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
-| 6 | clean extraction + agent steering (post-plan) | in progress | branch refactor/step-6-clean-extraction; PR stacked on #7 |
+| 6 | clean extraction + agent steering (post-plan) | in progress | PR #8 merged into its stale base and never reached master; restored + portable-steering additions in follow-up PR |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -436,3 +436,19 @@ Newest entry last. Every status change in the dashboard gets a line here.
   and refactor-09 got update notes, new lesson refactor-11
   (clean extraction + agent steering). PR opened; step complete when
   user merges (after #7).
+- 2026-07-05 — STEP 6 MERGE MISHAP + RESTORATION + ADDITIONS. PR #8 was
+  stacked on PR #7 (base = docs/user-manual). The user merged #7 first
+  and #8 second — but #8 merged into the docs/user-manual BRANCH, whose
+  content had already been copied to master, so step 6 never reached
+  master (GitHub shows #8 as MERGED regardless). LESSON FOR STACKED
+  PRs: after the bottom PR merges, confirm GitHub retargeted the upper
+  PR's base to master BEFORE merging it. Recovery: step-6 commit
+  53a4973 restored from the local repo and rebased onto master as
+  1f81396 on branch refactor/step-6-clean-extraction. Added on top
+  (user-approved): (1) the no-results message now carries in-band retry
+  guidance ("All search terms must match — try again with fewer or
+  different terms") — tool output is the only steering channel that
+  reaches EVERY harness (Codex etc.), unlike instructions/CLAUDE.md;
+  (2) AGENTS.md mirroring CLAUDE.md for non-Claude coding harnesses,
+  with cross-references to keep the two in sync. New PR opened against
+  master; step 6 complete when it merges.

@@ -1,13 +1,13 @@
-# MCP-Rust — KUKA Knowledge Server
+# Agent instructions — MCP-Rust (KUKA Knowledge Server)
 
-> AGENTS.md mirrors this file for other coding harnesses (Codex, etc.) —
-> keep the two in sync when policies change.
+This file is read by coding agents (Codex, and other harnesses that honor
+the AGENTS.md convention). Claude Code reads the equivalent CLAUDE.md —
+keep the two files in sync when policies change.
 
 A Rust learning project: an MCP server that answers KUKA AMR robot questions
-grounded in official KUKA documentation. Key docs: [MISSION.md](MISSION.md)
-(goals), [USER-MANUAL.md](USER-MANUAL.md) (how to install/use), and
-[REFACTOR-PLAN.md](REFACTOR-PLAN.md) (status dashboard + progress log — read
-it before doing any planned work, and keep it updated).
+grounded in official KUKA documentation. Key docs: MISSION.md (goals),
+USER-MANUAL.md (install/use), REFACTOR-PLAN.md (status dashboard + progress
+log — read it before doing any planned work, and keep it updated).
 
 ## Answering KUKA content questions
 
@@ -18,7 +18,7 @@ it before doing any planned work, and keep it updated).
 - Do **not** answer KUKA content questions by reading `kuka-docs/*` (source
   PDFs) or `knowledge/*.md` from the filesystem — those are the server's
   inputs, not a knowledge interface. (Reading them while developing or
-  debugging the server itself is of course fine.)
+  debugging the server itself is fine.)
 - After re-extracting documentation, call `reload_docs`.
 
 ## Build & test
