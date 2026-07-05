@@ -54,7 +54,7 @@ cargo is not installed on the Windows host.
 | 5a | chunking in extract | complete | PR #5 merged (a6a813e); lesson refactor-08 |
 | 5b | inverted index, seek excerpts, reload_docs | complete | PR #6 merged (4732155); lessons refactor-09, refactor-10 |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
-| 6 | clean extraction + agent steering (post-plan) | in progress | PR #8 merged into its stale base and never reached master; restored + portable-steering additions in follow-up PR |
+| 6 | clean extraction + agent steering (post-plan) | complete | PR #9 merged (e601cb3, after the #8 stacked-merge mishap); lesson refactor-11 |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -452,3 +452,10 @@ Newest entry last. Every status change in the dashboard gets a line here.
   (2) AGENTS.md mirroring CLAUDE.md for non-Claude coding harnesses,
   with cross-references to keep the two in sync. New PR opened against
   master; step 6 complete when it merges.
+- 2026-07-05 — STEP 6 COMPLETE (for real). User merged PR #9 (e601cb3).
+  This time VERIFIED on master before cleanup: both commits are
+  ancestors, CLAUDE.md/AGENTS.md/refactor-11 present, retry hint in
+  main.rs. Branch deleted local + remote; tree clean. All steps 1-6
+  complete; deferred items unchanged (5c escape hatch, IDF ranking,
+  index persistence, OCR for EmergencyFireAlarm.pdf, pandoc DOCX/PPTX
+  ingestion as next capability).
