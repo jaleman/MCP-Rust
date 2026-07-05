@@ -8,9 +8,6 @@
 
 use crate::frontmatter::extract_frontmatter_field;
 use anyhow::{Context, Result};
-use rmcp::ErrorData as McpError;
-use rmcp::model::{CallToolResult, Content};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// One loaded markdown document with its frontmatter parsed into fields.
@@ -118,68 +115,11 @@ pub fn resource_stem_is_safe(stem: &str) -> bool {
     !stem.is_empty() && !stem.contains(['/', '\\']) && !stem.contains("..")
 }
 
-pub fn list_docs_in(dir: &Path) -> Result<CallToolResult, McpError> {
-    // A missing/unreadable bundle directory is reported as a tool ERROR
-    // (isError = true in MCP), clearly distinct from an empty bundle.
-    let docs = match load_bundle(dir) {
-        Ok(docs) => docs,
-        Err(e) => {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
-                "Cannot read knowledge bundle: {e:#}"
-            ))]));
-        }
-    };
-
-    // Nothing in the bundle at all
-    if docs.is_empty() {
-        return Ok(CallToolResult::success(vec![Content::text(
-            "No documents found in the knowledge bundle.".to_string(),
-        )]));
-    }
-
-    let total = docs.len();
-
-    // Group titles by document type
-    let mut grouped: HashMap<String, Vec<String>> = HashMap::new();
-    for doc in docs {
-        grouped.entry(doc.doc_type).or_default().push(doc.title);
-    }
-
-    // Sort the type keys alphabetically so the output is stable across runs
-    let mut type_keys: Vec<String> = grouped.keys().cloned().collect();
-    type_keys.sort();
-
-    // Build one text section per type, with titles sorted within each section
-    let sections: Vec<String> = type_keys
-        .into_iter()
-        .map(|doc_type| {
-            let mut titles = grouped.remove(&doc_type).unwrap_or_default();
-            titles.sort();
-            let items: Vec<String> = titles.into_iter().map(|t| format!("  • {t}")).collect();
-            format!("{doc_type}:\n{}", items.join("\n"))
-        })
-        .collect();
-
-    Ok(CallToolResult::success(vec![Content::text(format!(
-        "Knowledge bundle — {total} document(s):\n\n{}",
-        sections.join("\n\n")
-    ))]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_util::setup_test_bundle;
     use std::fs;
-
-    #[test]
-    fn list_docs_shows_document_grouped_by_type() {
-        let temp_dir = setup_test_bundle();
-        let result = list_docs_in(temp_dir.path()).unwrap();
-        let output = format!("{:?}", result);
-        assert!(output.contains("Reflector Guide"), "Should list the document title");
-        assert!(output.contains("technical-note"), "Should group by type from frontmatter");
-    }
 
     #[test]
     fn document_load_parses_fields_and_body() {

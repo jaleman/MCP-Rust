@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 9: The Inverted Index</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 9</div>
+    <h1>The Inverted Index</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 5b — commit <code>2072866</code></span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>Turning the search inside out</h2>
+
+  <p>
+    Until now, every query read every document from disk, lowercased the entire
+    corpus, and scanned every word. Fine for 9 documents; hopeless for hundreds.
+    The inverted index flips the direction of the question — instead of
+    "document, do you contain this term?" asked N times, it's
+    "term, which documents contain you?" asked once:
+  </p>
+
+  <div class="diagram">
+    Forward (old):&nbsp; document → all its words&nbsp;&nbsp;&nbsp; (scan everything per query)<br>
+    Inverted (new): term → all its documents&nbsp;&nbsp; (one map lookup per query)
+  </div>
+
+  <p><strong>Rust — the core structures in <code>index.rs</code>:</strong></p>
+  <pre><code>pub struct Index {
+    docs: Vec&lt;DocMeta&gt;,                    // doc_id = position in this Vec
+    vocab: HashMap&lt;String, Vec&lt;Posting&gt;&gt;,  // term → where it appears
+}
+
+struct Posting {
+    doc_id: u32,
+    freq: u32,           // every occurrence counts…
+    positions: Vec&lt;u32&gt;, // …but only 16 byte-offsets are stored
+}</code></pre>
+
+  <p><strong>Java equivalent</strong> — and a familiar name:</p>
+  <pre><code>Map&lt;String, List&lt;Posting&gt;&gt; vocab = new HashMap&lt;&gt;();
+record Posting(int docId, int freq, int[] positions) {}</code></pre>
+
+  <p>
+    This is, at miniature scale, exactly the data structure inside Lucene (and
+    therefore Elasticsearch): vocabulary → posting lists. Building it by hand is
+    the best way to understand what those systems do — and when this project
+    outgrows the hand-rolled version, the swap target (tantivy, Rust's Lucene)
+    will feel familiar rather than magical.
+  </p>
+
+  <h2>Three design decisions worth remembering</h2>
+
+  <p>
+    <strong>1. The position cap.</strong> Positions are the only part of the index
+    that grows with <em>corpus</em> size rather than <em>vocabulary</em> size —
+    uncapped, they cost roughly one <code>u32</code> per word of text, approaching
+    the size of the corpus itself. Capping at 16 per (term, document) bounds memory
+    while keeping far more excerpt anchors than the 3 we ever show, and
+    <code>freq</code> keeps counting past the cap so scoring stays honest. A test
+    pins the behavior: 50 occurrences → <code>freq == 50</code>,
+    <code>positions.len() == 16</code>.
+  </p>
+
+  <p>
+    <strong>2. Boilerplate is filtered at build time, not query time.</strong>
+    The old engine computed repeated-line sets per document <em>on every query</em>
+    and filtered match positions afterwards. Now the index build walks each document
+    line by line and simply never indexes tokens on boilerplate lines. The whole
+    query-time filtering dance was deleted — repeated headers don't exist as far as
+    the index is concerned. (The test asserts <code>vocab</code> doesn't even
+    contain "kuka" for a document where it appears only in headers.)
+  </p>
+
+  <p>
+    <strong>3. Per-token lowercasing, original offsets.</strong> The very first code
+    review of this project flagged a latent bug: match positions were computed on
+    <code>content.to_lowercase()</code> but used to slice the original — and a
+    handful of Unicode characters change byte length when lowercased. The index
+    eliminates the bug <em>by construction</em>: each token is lowercased
+    individually to form its vocabulary key, while its recorded position always
+    points into the original bytes. There is no lowercased copy of the document
+    anywhere — nothing whose offsets could disagree.
+  </p>
+
+  <pre><code>fn tokenize(line: &amp;str) -&gt; Vec&lt;(usize, String)&gt; {
+    // walks char_indices; a token is a run of alphanumeric chars;
+    // KEY is token.to_lowercase(), OFFSET is into the original line
+}</code></pre>
+
+  <h2>Fuzzy matching got orders of magnitude cheaper</h2>
+
+  <p>
+    The old engine ran levenshtein against <em>every word of every document</em>
+    per query term. The new one scans the <em>vocabulary</em> — the set of unique
+    words, which is tiny relative to the corpus and grows very slowly no matter how
+    many documents you add (the real bundle: 12 documents but only 1,051 unique
+    terms):
+  </p>
+
+  <pre><code>fn matching_keys(&amp;self, term: &amp;str) -&gt; Vec&lt;&amp;str&gt; {
+    self.vocab
+        .keys()
+        .filter(|key| key.contains(term) || within_typo_tolerance(key, term))
+        .map(String::as_str)
+        .collect()
+}</code></pre>
+
+  <p>
+    Substring containment covers exact matches and "reflector" finding
+    "reflectors"; the typo tolerance handles misspellings. A pleasant side effect:
+    fuzzy matches now carry <em>real positions</em> (the positions of the matched
+    vocabulary words), so a typo query gets genuine excerpts instead of the old
+    "fall back to the start of the document."
+  </p>
+
+  <h2>Scoring: density beats bulk</h2>
+
+  <pre><code>score = (freq_total × 1000) / token_count     // per document</code></pre>
+
+  <p>
+    The old score was a raw match count, so a 100-page manual mentioning
+    "reflector" forty times in passing outranked a focused 2-page note. Dividing by
+    the document's token count (×1000 to stay an integer — <code>SearchHit.score</code>
+    is still a <code>usize</code>) rewards <em>density</em>. This works especially
+    well with step 5a's chunks, which are near-uniform in size: the chunk
+    <em>about</em> mission status now beats the chunk that merely mentions it.
+    This is the "TF" half of TF-IDF; the IDF half (rare terms count for more) is
+    the natural next refinement if ranking ever feels off.
+  </p>
+
+  <h2>Excerpts without loading documents</h2>
+
+  <p>
+    <code>DocMeta</code> deliberately does <em>not</em> hold the document body —
+    after the build, bodies are dropped and memory stays flat regardless of corpus
+    size. Excerpts are read straight from disk around the recorded positions:
+  </p>
+
+  <p><strong>Rust:</strong></p>
+  <pre><code>let mut file = std::fs::File::open(path)?;
+file.seek(SeekFrom::Start(start))?;
+let mut buf = Vec::with_capacity(len as usize);
+file.take(len).read_to_end(&amp;mut buf)?;
+String::from_utf8_lossy(&amp;buf)   // partial chars at the cut edges → U+FFFD, trimmed</code></pre>
+
+  <p><strong>Java equivalent:</strong></p>
+  <pre><code>try (var raf = new RandomAccessFile(path, "r")) {
+    raf.seek(start);
+    byte[] buf = new byte[len];
+    raf.readFully(buf);
+    new String(buf, StandardCharsets.UTF_8);   // malformed edges → U+FFFD
+}</code></pre>
+
+  <p>
+    A 450-byte read per excerpt, at most three per hit. No document is ever loaded
+    whole at query time — the property that makes gigabyte corpora feasible.
+  </p>
+
+  <h2>Did it work? The old-vs-new comparison</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th></th><th>Linear scan (steps 1–5a)</th><th>Inverted index (5b)</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>per-query work</td>
+        <td>read + lowercase + scan entire corpus</td>
+        <td>vocabulary lookups + a few 450-byte reads</td>
+      </tr>
+      <tr>
+        <td>memory at query time</td>
+        <td>full document + full lowercased copy</td>
+        <td>index only (bodies never loaded)</td>
+      </tr>
+      <tr>
+        <td>fuzzy cost</td>
+        <td>levenshtein × every word of every doc</td>
+        <td>levenshtein × 1,051 unique terms</td>
+      </tr>
+      <tr>
+        <td>"mission status payload" on the real bundle</td>
+        <td>4 results</td>
+        <td>same 4 documents, same order, better-anchored excerpts</td>
+      </tr>
+      <tr>
+        <td>index build</td>
+        <td>—</td>
+        <td>12 docs / 1,051 terms in 23 ms at startup</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "What is TF-IDF and how would I add the IDF half to this scoring?",
+    "Why does the posting-list construction rely on documents being indexed in doc_id order?",
+    or "At what corpus size does the vocabulary substring scan become the bottleneck?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-08-page-chunking.html">← Refactor Appendix 8: Page Chunking</a>
+    <a href="refactor-10-arc-rwlock-reload.html">Refactor Appendix 10: Arc, RwLock, and Live Reload →</a>
+  </nav>
+
+</div>
+</body>
+</html>
