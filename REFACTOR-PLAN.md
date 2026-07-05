@@ -52,7 +52,7 @@ cargo is not installed on the Windows host.
 | 3 | SearchHit API, consts, LazyLock stop words, test rewrite | complete | PR #2 merged (1ace0b2); lessons refactor-05, refactor-06 |
 | 4 | config into KukaServer | complete | PR #4 merged (e221860); lesson refactor-07 |
 | 5a | chunking in extract | complete | PR #5 merged (a6a813e); lesson refactor-08 |
-| 5b | inverted index, seek excerpts, reload_docs | in progress | implemented (2072866) + lessons refactor-09/10; PR open, awaiting user merge |
+| 5b | inverted index, seek excerpts, reload_docs | complete | PR #6 merged (4732155); lessons refactor-09, refactor-10 |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
 
 ## Resuming mid-step (handoff protocol)
@@ -383,3 +383,13 @@ Newest entry last. Every status change in the dashboard gets a line here.
   refactor-10 (Arc/RwLock/reload) written. PR opened; step complete
   when user merges. After merge the PLAN IS FULLY COMPLETE except
   deferred 5c (tantivy/hybrid escape hatch, trigger conditions in §5c).
+- 2026-07-04 — STEP 5B COMPLETE — PLAN COMPLETE. User merged PR #6
+  (merge commit 4732155). Branch deleted local + remote; master synced;
+  tree clean. All steps 1-5b done across 6 PRs with 10 refactor lessons
+  (refactor-01 .. refactor-10) and 42 passing tests. Only 5c remains,
+  deliberately deferred: revisit if index build exceeds a few seconds
+  or fuzzy vocab scans slow down (then evaluate tantivy / SQLite FTS5,
+  or hybrid vector retrieval per the architecture discussion). Other
+  known follow-ups, none urgent: EmergencyFireAlarm.pdf needs OCR to be
+  indexable; ranking could add the IDF half of TF-IDF; index
+  persistence only matters at much larger corpus scale.
