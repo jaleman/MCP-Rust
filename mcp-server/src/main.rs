@@ -80,7 +80,12 @@ impl KukaServer {
         Ok(format_doc_list(&self.index.read().unwrap()))
     }
 
-    #[tool(description = "Search KUKA robot documentation for a given query")]
+    #[tool(
+        description = "Search KUKA robot documentation. Always the FIRST tool for any KUKA question. \
+                       Returns ranked excerpts, each with a kuka://docs/ resource URI. If the excerpts \
+                       do not answer the question, retry with different search terms, or read the hit's \
+                       resource URI for the full section — do not look for source files instead."
+    )]
     fn search_docs(
         &self,
         Parameters(input): Parameters<SearchInput>,
@@ -144,12 +149,14 @@ fn run_search(index: &Index, query: &str) -> CallToolResult {
     CallToolResult::success(vec![Content::text(text)])
 }
 
-// Renders one hit as the bullet-point block shown to the client.
+// Renders one hit as the bullet-point block shown to the client. The pointer
+// shown is the kuka:// resource URI — an action the agent can take (read the
+// full section) — never a source-file path it might be tempted to open.
 fn format_hit(hit: &SearchHit) -> String {
     format!(
-        "• {}\n  Source: {}\n\n  ...{}...",
+        "• {}\n  Resource: kuka://docs/{}\n\n  ...{}...",
         hit.title,
-        hit.resource,
+        hit.stem,
         hit.excerpts.join("\n\n  ...")
     )
 }
@@ -206,11 +213,16 @@ impl ServerHandler for KukaServer {
         .with_instructions(
             "KUKA AMR robot knowledge server, grounded in official KUKA \
              documentation (AMR fleet manuals, technical notes, safety and \
-             deployment guides). Use search_docs to find relevant passages \
-             for a query, list_docs to see every document grouped by type, \
-             and the kuka://docs/{name} resources to read full documents. \
-             After re-extracting documentation, call reload_docs to rebuild \
-             the index. ping confirms the server is alive."
+             deployment guides). Recommended workflow for ANY KUKA question: \
+             (1) call search_docs first; (2) if the excerpts do not fully \
+             answer, retry search_docs with different terms, or read the \
+             kuka://docs/{name} resource shown in the hit to get the full \
+             section (sections are small — always safe to read whole). Do \
+             not browse the resource list to hunt for answers, and never \
+             fall back to reading source documents outside these tools. \
+             list_docs shows every document grouped by type. After \
+             re-extracting documentation, call reload_docs to rebuild the \
+             index. ping confirms the server is alive."
                 .to_string(),
         )
     }
@@ -374,7 +386,11 @@ Reflectors must be mounted at a height of 150 to 2000 mm above floor level.";
         let text = result_text(&result);
         assert!(text.contains("Found 1 result(s) for 'reflector height'"));
         assert!(text.contains("Reflector Guide"));
-        assert!(text.contains("Source: kuka-docs/test.pdf"));
+        assert!(
+            text.contains("Resource: kuka://docs/reflector-guide"),
+            "hits must carry the actionable resource URI, not a source-file path"
+        );
+        assert!(!text.contains(".pdf"), "no source-file paths in tool output");
     }
 
     #[test]

@@ -78,6 +78,11 @@ record Posting(int docId, int freq, int[] positions) {}</code></pre>
     query-time filtering dance was deleted — repeated headers don't exist as far as
     the index is concerned. (The test asserts <code>vocab</code> doesn't even
     contain "kuka" for a document where it appears only in headers.)
+    <em>Update (step 6): cleanup moved one stage further upstream — the extractor now
+    strips these lines (plus TOC dot-leaders) from the bundle files themselves, so
+    excerpt text is clean too; this index-time filter remains as defense-in-depth for
+    hand-written bundle files. See
+    <a href="refactor-11-clean-extraction-and-agent-steering.html">Appendix 11</a>.</em>
   </p>
 
   <p>

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 11: Clean Extraction and Agent Steering</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 11</div>
+    <h1>Clean Extraction and Agent Steering</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 6 — driven by a real agent failure</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The incident</h2>
+
+  <p>
+    A Claude session was asked: <em>"what is the minimum safe distance for a
+    KMP 1500P?"</em> The answer was in the bundle — the distance table extracted
+    fine. But the agent's searches kept returning table-of-contents lines and intro
+    text, so it gave up on <code>search_docs</code>, tried to read the source PDF
+    from the filesystem, then browsed the raw resource list. Everything it did after
+    the first search was wrong — and almost none of it was the agent's fault.
+    This lesson is about the three server defects that <em>invited</em> the
+    misbehavior, because they generalize to any tool you ever build for an AI agent.
+  </p>
+
+  <h2>Defect 1: the TOC always wins the excerpt contest</h2>
+
+  <p>
+    Excerpt anchors are ranked by co-occurrence: positions where many query terms
+    appear close together. Look at a table-of-contents through that lens:
+  </p>
+
+  <pre><code>3   Minimum Safe Distances ........................................ 5
+3.1 KMP 600P / KMP 1500P .......................................... 7</code></pre>
+
+  <p>
+    Every term of the query, packed into two adjacent lines — a perfect
+    co-occurrence score. And the tie-break preferred <em>earlier</em> positions,
+    and the TOC is always at the front of the file. So for almost any query, all
+    three excerpt windows were spent on navigation lines before reaching content.
+    The repeated-lines filter couldn't help: TOC lines appear <em>once</em>.
+  </p>
+
+  <h2>The fix's real insight: pipeline position</h2>
+
+  <p>
+    We had already moved boilerplate filtering from query time to index time
+    (<a href="refactor-09-inverted-index.html">Appendix 9</a>). This step moves
+    cleanup one stage further upstream — to <strong>extraction</strong>, where the
+    bundle files are written:
+  </p>
+
+  <div class="diagram">
+    query time&nbsp;&nbsp;&nbsp; → filter on every search&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(steps 1–4: wasteful, excerpts still dirty)<br>
+    index time&nbsp;&nbsp;&nbsp; → filter once per startup&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(step 5b: anchors clean, excerpt TEXT still dirty)<br>
+    extract time → filter once, ever&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(step 6: files clean — everything downstream clean)
+  </div>
+
+  <p>
+    The Java analogy is ETL design: validate and cleanse at <em>ingestion</em>, not
+    with WHERE clauses in every query. The further upstream a data-quality rule
+    lives, the more consumers it protects — excerpts read raw bytes from the bundle
+    files, so only extract-time cleaning could stop headers appearing <em>inside</em>
+    excerpt text:
+  </p>
+
+  <pre><code>/// chunk.rs — runs before chunking, so page boundaries survive
+pub fn clean_extracted_text(text: &amp;str) -&gt; String {
+    // count repetition across the whole document (page breaks count as line breaks)
+    let boilerplate = repeated_lines(&amp;text.replace('\x0c', "\n"));
+
+    text.split('\x0c')
+        .map(|page| page.lines()
+            .filter(|line| {
+                let norm = normalize_line(line);
+                norm.is_empty()                              // keep paragraph structure
+                    || (!boilerplate.contains(&amp;norm)         // strip repeated headers/footers
+                        &amp;&amp; !line.contains("....."))          // strip TOC dot-leaders
+            })
+            .collect::&lt;Vec&lt;_&gt;&gt;().join("\n"))
+        .collect::&lt;Vec&lt;_&gt;&gt;().join("\x0c")
+}</code></pre>
+
+  <p>
+    (The index-time filter from Appendix 9 stays as defense-in-depth for
+    hand-written bundle files.) One bug the tests caught immediately:
+    <code>str::lines()</code> splits only on <code>\n</code>, so a header directly
+    after a page break merged into the previous line and escaped the repetition
+    count — hence the <code>replace('\x0c', "\n")</code> before counting. We also
+    switched to <code>pdftotext -layout</code>, which preserves columnar structure:
+    the distance table now extracts as readable rows instead of a vertical smear of
+    labels followed by numbers.
+  </p>
+
+  <h2>Defect 2: the tool output pointed at a file the agent couldn't use</h2>
+
+  <p>Every search hit used to end with:</p>
+
+  <pre><code>Source: kuka-docs/KUKA.AMR - Safe Minimum Distances v1.1.pdf</code></pre>
+
+  <p>
+    Put yourself in the agent's position: excerpts unhelpful, and the tool itself
+    hands you… a PDF path. Reaching for the filesystem was practically suggested.
+    Worse, the designed escalation — reading the document's
+    <code>kuka://docs/…</code> resource — was <em>not</em> discoverable from the
+    hit; the agent had to browse the whole resource list, which is precisely the
+    misbehavior we saw. And in production the PDFs won't exist on the agent's
+    machine at all. The fix is an API-design principle older than MCP:
+    <strong>return actionable references, not internal paths</strong> (REST calls
+    this HATEOAS — each response carries the links for the next step):
+  </p>
+
+  <pre><code>// SearchHit: resource (PDF path) replaced by stem (bundle identifier)
+pub struct SearchHit {
+    pub title: String,
+    pub stem: String,      // → presentation renders kuka://docs/{stem}
+    pub score: usize,
+    pub excerpts: Vec&lt;String&gt;,
+}
+
+// format_hit now emits the ACTIONABLE pointer:
+"• {title}\n  Resource: kuka://docs/{stem}\n\n  ...{excerpts}..."</code></pre>
+
+  <p>
+    A bin test now pins the contract: <code>assert!(!text.contains(".pdf"))</code>
+    — no source-file path ever appears in tool output again. The PDF name survives
+    in the bundle file's frontmatter for human auditing; agents never see it.
+  </p>
+
+  <h2>Defect 3: nobody told the agent the intended workflow</h2>
+
+  <p>
+    Agents read two things when deciding how to use your server: the per-tool
+    <code>description</code> and the server-level <code>instructions</code> from the
+    handshake. Ours described <em>what</em> the tools did but not <em>how to work
+    with them</em> — nothing said "retry with different terms before giving up" or
+    "the resource URI in the hit is the follow-up". Both now encode the workflow:
+  </p>
+
+  <pre><code>#[tool(description = "Search KUKA robot documentation. Always the FIRST tool for any \
+    KUKA question. Returns ranked excerpts, each with a kuka://docs/ resource URI. \
+    If the excerpts do not answer the question, retry with different search terms, \
+    or read the hit's resource URI for the full section — do not look for source \
+    files instead.")]</code></pre>
+
+  <p>
+    Think of descriptions and instructions as <em>Javadoc that gets executed</em>:
+    an agent literally follows what they say, so vague docs produce vague behavior.
+    A <code>CLAUDE.md</code> in the repo root now carries the same policy for
+    coding sessions working inside this project.
+  </p>
+
+  <h2>The result</h2>
+
+  <p>The exact query that derailed the other session, after the fix:</p>
+
+  <pre><code>• KUKA.AMR - Safe Minimum Distances v1.1
+  Resource: kuka://docs/kukaamr---safe-minimum-distances-v11
+
+  ...This document describes the required clearances and distances...
+  ...D1/DR1      Minimum safe distance between the AMR/Load and the obstacles
+     D2/DR2      Minimum safe distance between two AMRs/Loads when passing...</code></pre>
+
+  <p>
+    No TOC noise, real content, a readable table row, and the URI for reading the
+    complete 3 KB section. The agent's correct path is now the <em>obvious</em>
+    path — which is the actual moral: when an agent misuses your tools, fix the
+    tools before blaming the agent.
+  </p>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Principle</th><th>Java world</th><th>This server</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>clean at ingestion, not per query</td>
+        <td>ETL cleansing vs WHERE-clause hacks</td>
+        <td><code>clean_extracted_text</code> in the extractor</td>
+      </tr>
+      <tr>
+        <td>return actionable references</td>
+        <td>HATEOAS links, never internal file paths</td>
+        <td><code>kuka://docs/{stem}</code> in every hit</td>
+      </tr>
+      <tr>
+        <td>document the workflow, not just the method</td>
+        <td>Javadoc <code>@apiNote</code> usage guidance</td>
+        <td>tool descriptions + MCP instructions</td>
+      </tr>
+      <tr>
+        <td>defense in depth</td>
+        <td>validate at boundary AND in the domain</td>
+        <td>extract-time cleaning + index-time filter</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "Why does str::lines() ignore form feeds, and what other line-ending surprises exist?",
+    "How would I detect TOC pages that don't use dot leaders?",
+    or "What else belongs in tool descriptions to steer agent behavior?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-10-arc-rwlock-reload.html">← Refactor Appendix 10: Arc, RwLock, and Live Reload</a>
+    <a href="refactor-08-page-chunking.html">← Related: Appendix 8, Page Chunking</a>
+  </nav>
+
+</div>
+</body>
+</html>
