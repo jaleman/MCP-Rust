@@ -48,7 +48,12 @@ static STOP_WORDS: LazyLock<HashSet<&str>> = LazyLock::new(|| {
 #[derive(Debug)]
 pub struct SearchHit {
     pub title: String,
-    pub resource: String,
+    /// The document's bundle identifier (filename without .md). The
+    /// presentation layer turns this into the kuka://docs/{stem} resource
+    /// URI — the ACTIONABLE pointer for reading the full section. Source-PDF
+    /// paths deliberately do not appear in hits: agents can't open them, and
+    /// showing them invites falling back to raw files instead of the tools.
+    pub stem: String,
     /// Term frequency normalised by document length, scaled ×1000 so it
     /// stays an integer. Longer documents no longer win just by being long.
     pub score: usize,

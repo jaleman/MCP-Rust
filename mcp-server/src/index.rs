@@ -236,7 +236,7 @@ impl Index {
 
             hits.push(SearchHit {
                 title: meta.title.clone(),
-                resource: meta.resource.clone(),
+                stem: meta.stem.clone(),
                 // Frequency normalised by document length (×1000 to stay
                 // integral): a focused 2-page note now outranks a long manual
                 // with the same number of scattered mentions.
@@ -394,7 +394,7 @@ KUKA Manual Header";
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "Reflector Guide");
-        assert_eq!(hits[0].resource, "kuka-docs/test.pdf");
+        assert_eq!(hits[0].stem, "reflector-guide", "stem is the resource identifier");
         assert!(hits[0].score > 0);
         assert!(
             hits[0].excerpts.iter().any(|e| e.contains("150")),
