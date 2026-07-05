@@ -3,7 +3,7 @@
 // index.rs — since step 5b, search runs against a prebuilt inverted index
 // instead of scanning documents linearly.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::LazyLock;
 use strsim::levenshtein; // edit-distance function from the strsim crate
 
@@ -19,10 +19,6 @@ pub(crate) const EXCERPT_AFTER: usize = 300;
 
 /// Maximum number of excerpts shown per document.
 pub(crate) const MAX_EXCERPTS: usize = 3;
-
-/// A normalised line appearing at least this many times counts as boilerplate
-/// (running headers, footers, page titles).
-pub(crate) const BOILERPLATE_MIN_REPEATS: usize = 3;
 
 /// Terms shorter than this must match exactly — fuzzy matching short words
 /// produces too many false positives.
@@ -91,27 +87,13 @@ pub(crate) fn within_typo_tolerance(word: &str, term: &str) -> bool {
 
 // Collapses internal whitespace and lowercases a line so that
 // "  KUKA Robotics GmbH  " and "kuka robotics gmbh" count as the same line.
+// Used by the extract-time cleaner in chunk.rs — boilerplate detection lives
+// there now, where page structure still exists (see lesson refactor-12).
 pub(crate) fn normalize_line(s: &str) -> String {
     s.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
         .to_lowercase()
-}
-
-// Returns a HashSet of normalised lines that appear BOILERPLATE_MIN_REPEATS
-// or more times in text — running headers, footers, page titles.
-pub(crate) fn repeated_lines(text: &str) -> HashSet<String> {
-    let mut freq: HashMap<String, usize> = HashMap::new();
-    for line in text.lines() {
-        let norm = normalize_line(line);
-        if !norm.is_empty() {
-            *freq.entry(norm).or_insert(0) += 1;
-        }
-    }
-    freq.into_iter()
-        .filter(|(_, count)| *count >= BOILERPLATE_MIN_REPEATS)
-        .map(|(line, _)| line)
-        .collect()
 }
 
 #[cfg(test)]
@@ -163,22 +145,10 @@ mod tests {
         assert!(!within_typo_tolerance("reflector", "refl"));
     }
 
-    // --- normalize_line / repeated_lines tests ---
+    // --- normalize_line ---
 
     #[test]
-    fn repeated_lines_excludes_boilerplate() {
-        let text = "KUKA Technical Reference\n\
-                    KUKA Technical Reference\n\
-                    KUKA Technical Reference\n\
-                    KUKA Technical Reference\n\n\
-                    Reflectors must be mounted at 150mm height.\n\n\
-                    KUKA Technical Reference\n\
-                    KUKA Technical Reference";
-        let rep = repeated_lines(text);
-        assert!(rep.contains("kuka technical reference"), "header should be in boilerplate set");
-        assert!(
-            !rep.contains("reflectors must be mounted at 150mm height."),
-            "body content should not be in boilerplate set"
-        );
+    fn normalize_collapses_whitespace_and_case() {
+        assert_eq!(normalize_line("  KUKA   Robotics\tGmbH  "), "kuka robotics gmbh");
     }
 }

@@ -5,8 +5,8 @@
 //     of scanning every word of every document;
 //   - document BODIES are not kept in memory — excerpts are read from disk
 //     by seeking to the recorded byte offsets;
-//   - boilerplate (repeated headers/footers) is filtered once at build time,
-//     so those tokens never even enter the index;
+//   - the bundle is trusted as already CLEAN: headers/footers/TOC lines are
+//     stripped at extract time (chunk.rs), where page structure still exists;
 //   - positions are recorded per token in the ORIGINAL file bytes. Tokens are
 //     lowercased individually for the vocabulary key, so there is no
 //     lowercased copy of the document whose offsets could disagree with the
@@ -17,8 +17,8 @@
 
 use crate::bundle::load_bundle;
 use crate::search::{
-    EXCERPT_AFTER, EXCERPT_BEFORE, MAX_EXCERPTS, PROXIMITY_WINDOW, SearchHit, normalize_line,
-    repeated_lines, within_typo_tolerance,
+    EXCERPT_AFTER, EXCERPT_BEFORE, MAX_EXCERPTS, PROXIMITY_WINDOW, SearchHit,
+    within_typo_tolerance,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -42,7 +42,7 @@ pub struct DocMeta {
     pub resource: String,
     pub description: Option<String>,
     pub body_start: usize,
-    /// Non-boilerplate tokens in the body — the denominator for scoring.
+    /// Tokens in the body — the denominator for length-normalised scoring.
     token_count: usize,
 }
 
@@ -69,40 +69,36 @@ impl Index {
         for doc in documents {
             let doc_id = docs.len() as u32;
 
-            // Boilerplate is decided per document, once, at build time.
-            let boilerplate = repeated_lines(doc.body());
-
+            // The bundle is trusted as already clean — headers/footers and
+            // TOC lines are stripped at EXTRACT time, where page structure
+            // still exists. An index-time repeated-lines filter used to live
+            // here and was removed deliberately: chunks carry no page info,
+            // so it could not tell a running header from legitimately
+            // repeated content, and it silently un-indexed a real lookup
+            // table (the RobotType incident — see lesson refactor-12).
             let mut token_count = 0usize;
 
-            // Walk the body line by line (tracking the running byte offset)
-            // so whole boilerplate lines are skipped before tokenizing.
-            let mut line_start = doc.body_start;
-            for line in doc.content[doc.body_start..].split_inclusive('\n') {
-                if !boilerplate.contains(&normalize_line(line)) {
-                    for (offset_in_line, key) in tokenize(line) {
-                        token_count += 1;
-                        let pos = (line_start + offset_in_line) as u32;
+            for (offset_in_body, key) in tokenize(doc.body()) {
+                token_count += 1;
+                let pos = (doc.body_start + offset_in_body) as u32;
 
-                        let postings = vocab.entry(key).or_default();
-                        // Documents are indexed in ascending doc_id order, so
-                        // this term's last posting is ours iff it has our id —
-                        // posting lists stay sorted by doc_id for free.
-                        match postings.last_mut() {
-                            Some(p) if p.doc_id == doc_id => {
-                                p.freq += 1;
-                                if p.positions.len() < MAX_POSITIONS_PER_POSTING {
-                                    p.positions.push(pos);
-                                }
-                            }
-                            _ => postings.push(Posting {
-                                doc_id,
-                                freq: 1,
-                                positions: vec![pos],
-                            }),
+                let postings = vocab.entry(key).or_default();
+                // Documents are indexed in ascending doc_id order, so this
+                // term's last posting is ours iff it has our id — posting
+                // lists stay sorted by doc_id for free.
+                match postings.last_mut() {
+                    Some(p) if p.doc_id == doc_id => {
+                        p.freq += 1;
+                        if p.positions.len() < MAX_POSITIONS_PER_POSTING {
+                            p.positions.push(pos);
                         }
                     }
+                    _ => postings.push(Posting {
+                        doc_id,
+                        freq: 1,
+                        positions: vec![pos],
+                    }),
                 }
-                line_start += line.len();
             }
 
             docs.push(DocMeta {
@@ -335,34 +331,65 @@ mod tests {
     }
 
     #[test]
-    fn boilerplate_lines_never_enter_the_index() {
+    fn index_trusts_bundle_content_including_repeated_lines() {
+        // The index has NO repetition filter of its own — cleaning happens at
+        // extract time where page structure exists. A legitimately repeated
+        // line in a bundle file (a lookup table printed under three payload
+        // sections) MUST be indexed; an old index-time filter dropped exactly
+        // this and made the RobotType table unsearchable.
         let temp_dir = tempfile::TempDir::new().unwrap();
         let doc = "\
 ---
 type: technical-note
-title: Maintenance Guide
-description: Test for boilerplate filtering.
+title: Payload Guide
 resource: kuka-docs/test.pdf
-tags: []
-timestamp: 2026-01-01T00:00:00Z
 ---
 
-KUKA Manual Header
-KUKA Manual Header
-KUKA Manual Header
-KUKA Manual Header
-
-Only reflector content here with no matching terms.
-
-KUKA Manual Header
-KUKA Manual Header";
-        fs::write(temp_dir.path().join("maintenance-guide.md"), doc).unwrap();
+MissionCommand fields:
+Code 0 means KMP 250P
+MultiMissionCommand fields:
+Code 0 means KMP 250P
+MultiWorkflowCommand fields:
+Code 0 means KMP 250P";
+        fs::write(temp_dir.path().join("payload-guide.md"), doc).unwrap();
 
         let index = Index::build(temp_dir.path()).unwrap();
-        // "kuka" appears only on the repeated header lines → filtered at
-        // build time → not in the vocabulary at all
-        assert!(!index.vocab.contains_key("kuka"));
-        assert!(index.vocab.contains_key("reflector"));
+        assert!(index.vocab.contains_key("250p"), "repeated content must be indexed");
+        assert_eq!(index.vocab["250p"][0].freq, 3, "every repetition counts");
+
+        let hits = run_search(temp_dir.path(), "250p");
+        assert_eq!(hits.len(), 1, "the repeated table must be searchable");
+    }
+
+    #[test]
+    fn extract_cleaning_and_index_work_end_to_end() {
+        // The pipeline contract: raw extractor output goes through
+        // clean_extracted_text before landing in the bundle. Page-edge
+        // headers disappear (unsearchable); mid-page repeated content stays.
+        use crate::chunk::clean_extracted_text;
+
+        let filler: String = (0..12).map(|i| format!("Filler sentence number {i}.\n")).collect();
+        let page = |body: &str| format!("KUKA MANUAL HEADER\n{filler}{body}\n");
+        let raw = format!(
+            "{}\x0c{}\x0c{}",
+            page("Reflector spacing is 8 metres."),
+            page("Reflector height is 150 mm."),
+            page("Reflector diameter is 50 mm.")
+        );
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let doc = format!(
+            "---\ntype: technical-note\ntitle: Cleaned Guide\nresource: kuka-docs/test.pdf\n---\n\n{}",
+            clean_extracted_text(&raw)
+        );
+        fs::write(temp_dir.path().join("cleaned-guide.md"), doc).unwrap();
+
+        assert!(
+            run_search(temp_dir.path(), "manual header").is_empty(),
+            "page-edge header was cleaned at extract time — nothing to find"
+        );
+        let hits = run_search(temp_dir.path(), "reflector height");
+        assert_eq!(hits.len(), 1, "content survives cleaning and is searchable");
     }
 
     #[test]
@@ -430,68 +457,6 @@ Reflector reflector reflector. The reflector is a reflector among reflectors.";
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].title, "Reflector Everything");
         assert!(hits[0].score > hits[1].score);
-    }
-
-    #[test]
-    fn search_ignores_boilerplate_only_matches() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let doc = "\
----
-type: technical-note
-title: Maintenance Guide
-description: Test for boilerplate filtering.
-resource: kuka-docs/test.pdf
-tags: []
-timestamp: 2026-01-01T00:00:00Z
----
-
-KUKA Manual Header
-KUKA Manual Header
-KUKA Manual Header
-KUKA Manual Header
-
-Only reflector content here with no matching terms.
-
-KUKA Manual Header
-KUKA Manual Header";
-        fs::write(temp_dir.path().join("maintenance-guide.md"), doc).unwrap();
-
-        assert!(
-            run_search(temp_dir.path(), "kuka").is_empty(),
-            "boilerplate-only match must produce no hit"
-        );
-    }
-
-    #[test]
-    fn search_excerpt_anchors_on_body_not_boilerplate() {
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let doc = "\
----
-type: technical-note
-title: Placement Guide
-description: Test for excerpt anchoring.
-resource: kuka-docs/test.pdf
-tags: []
-timestamp: 2026-01-01T00:00:00Z
----
-
-Technical Guidance Note
-Technical Guidance Note
-Technical Guidance Note
-Technical Guidance Note
-
-Technical specifications require 150mm minimum clearance for reflectors.
-
-Technical Guidance Note
-Technical Guidance Note";
-        fs::write(temp_dir.path().join("placement-guide.md"), doc).unwrap();
-
-        let hits = run_search(temp_dir.path(), "technical specifications");
-        assert_eq!(hits.len(), 1);
-        assert!(
-            hits[0].excerpts.iter().any(|e| e.contains("150mm")),
-            "excerpt should come from the body line, not the repeated header"
-        );
     }
 
     #[test]

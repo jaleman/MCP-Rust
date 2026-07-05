@@ -43,9 +43,12 @@ with page-level references back to the source PDFs.
 - **Page-level provenance**: results from large documents are titled with
   their page range, e.g. *"MQTT Payload Definitions (pages 9–16)"*, so you
   can find the passage in the original PDF.
-- **Clean extraction**: repeated page headers/footers and table-of-contents
+- **Clean extraction**: running page headers/footers (identified by
+  repeating *at page edges*), page-number markers, and table-of-contents
   lines are stripped at extraction time, and tables keep their layout — so
-  search results show content, not navigation noise.
+  search results show content, not navigation noise. Content that repeats
+  *inside* pages (a lookup table printed under several sections) is
+  deliberately preserved.
 - **Document listing and full-document reading** via MCP resources.
 - **Live reload**: add or re-extract documents and refresh the index without
   restarting the server.
@@ -72,16 +75,15 @@ kuka-docs/*.pdf ──────────────────▶  knowl
 ```
 
 1. **Extraction**: `extract` pulls the text out of each PDF, cleans it
-   (repeated page headers/footers and table-of-contents lines are stripped —
-   they are navigation, not knowledge), and writes it as markdown files with
-   a metadata header (the *OKF frontmatter*: title, type, source PDF,
-   timestamp). Documents larger than ~8 KB are split into chunks on page
-   boundaries, one file per chunk, so every unit is small enough for an AI
-   agent to read comfortably.
+   (running headers/footers, page-number markers, and table-of-contents
+   lines are stripped — they are navigation, not knowledge), and writes it
+   as markdown files with a metadata header (the *OKF frontmatter*: title,
+   type, source PDF, timestamp). Documents larger than ~8 KB are split into
+   chunks on page boundaries, one file per chunk, so every unit is small
+   enough for an AI agent to read comfortably.
 2. **Indexing**: at startup, `mcp-server` reads every bundle file once and
-   builds an inverted index (term → documents and positions). Repeated
-   headers and footers are filtered out at this stage so they never pollute
-   search results.
+   builds an inverted index (term → documents and positions). The bundle is
+   trusted as already clean — everything in it is searchable.
 3. **Serving**: the AI client launches `mcp-server` and talks to it over
    stdin/stdout. When you ask a KUKA question, the client calls the server's
    search tool, receives ranked excerpts, and composes an answer grounded in
@@ -187,9 +189,12 @@ Done: 9 extracted, 1 failed.
   split into page-ranged chunks (`-p009-016` = pages 9–16). Each chunk knows
   its parent document and page range, which is how search results get their
   page provenance.
-- The text is **cleaned automatically**: repeated page headers/footers and
+- The text is **cleaned automatically**: running headers/footers (lines that
+  repeat at the top/bottom of pages), "Page N of M" markers, and
   table-of-contents dot-leader lines are stripped, and tables are extracted
   with layout preserved (`pdftotext -layout`) so their rows stay readable.
+  Content that repeats *within* pages — like a lookup table printed under
+  several sections — is kept in full.
 - A failure like `no text could be extracted (image-only or empty PDF?)`
   means the PDF has no text layer (it's a scan). OCR it first, or accept
   that it won't be searchable. One bad PDF never aborts the batch.
