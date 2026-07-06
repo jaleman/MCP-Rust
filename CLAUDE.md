@@ -23,9 +23,11 @@ it before doing any planned work, and keep it updated).
 - **Diagrams**: search hits may carry `Diagrams: kuka://images/{name}` lines.
   Read the resource to view/interpret the image yourself. When the USER asks
   to *see* a diagram, reading it is not enough — the chat panel shows only a
-  link. Also open the image on their screen:
-  `code -r knowledge/images/{name}` (the same PNGs live in the bundle), which
-  displays it in a VS Code image tab.
+  link. Also open the image on their screen (the same PNGs live in the
+  bundle): `code -r knowledge/images/{name}` in VS Code sessions, otherwise
+  the OS default viewer (`Start-Process` on Windows, `xdg-open` on Linux).
+  Clients that render MCP images inline (Claude Desktop, claude.ai) need
+  none of this — there the diagram appears in the chat automatically.
 
 ## Build & test
 

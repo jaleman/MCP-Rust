@@ -23,8 +23,10 @@ log — read it before doing any planned work, and keep it updated).
 - **Diagrams**: search hits may carry `Diagrams: kuka://images/{name}` lines.
   Read the resource to view/interpret the image yourself. When the USER asks
   to *see* a diagram, reading it is not enough — also open the image on their
-  screen: `code -r knowledge/images/{name}` (the same PNGs live in the
-  bundle), which displays it in an editor image tab.
+  screen (the same PNGs live in the bundle): `code -r knowledge/images/{name}`
+  in editor sessions, otherwise the OS default viewer (`Start-Process` on
+  Windows, `xdg-open` on Linux). Clients that render MCP images inline
+  (Claude Desktop, claude.ai) need none of this.
 
 ## Build & test
 
