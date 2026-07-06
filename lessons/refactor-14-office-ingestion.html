@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Refactor Appendix 14: Office and Text Ingestion</title>
+    <link rel="stylesheet" href="../assets/style.css">
+</head>
+
+<body>
+    <div class="container">
+
+        <header class="lesson-header">
+            <div class="lesson-number">Refactor Appendix 14</div>
+            <h1>Office and Text Ingestion</h1>
+            <div class="lesson-meta">
+                <span>Refactor step 9a — more source formats, same extraction pipeline</span>
+                <span>KUKA MCP Server in Rust</span>
+            </div>
+        </header>
+
+        <h2>The design constraint</h2>
+
+        <p>
+            Step 9a adds <code>.docx</code>, <code>.doc</code>, <code>.pptx</code>,
+            <code>.ppt</code>, and <code>.txt</code> input support, but it deliberately
+            does not change search, indexing, frontmatter parsing, or chunking. That is
+            the important part. A new source format should enter the same clean → chunk
+            → OKF write path as PDFs, because every downstream guarantee already lives
+            there: page ranges, OCR tags, small resources, and stable resource URIs.
+        </p>
+
+        <p>
+            The Java instinct might be to reach for Apache POI and parse Word or
+            PowerPoint in process. That can work, but it asks the application to learn
+            every Office layout rule. Here LibreOffice already knows how to render Office
+            documents as PDFs, and our PDF path already knows how to extract page-aware
+            text. So the small Rust program shells out to <code>soffice</code> and keeps
+            the rest of the architecture unchanged.
+        </p>
+
+        <div class="diagram">
+            PDF → pdftotext / OCR → clean → chunk → OKF markdown<br>
+            Office → soffice temp PDF → pdftotext / OCR → clean → chunk → OKF markdown<br>
+            TXT → read_to_string → clean → chunk → OKF markdown
+        </div>
+
+        <h2>Routing by extension</h2>
+
+        <pre><code>#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IngestKind {
+    Pdf,
+    Office,
+    Text,
+}
+
+fn ingest_kind(path: &amp;Path) -&gt; Option&lt;IngestKind&gt; {
+    let extension = path.extension()?.to_str()?;
+    if extension.eq_ignore_ascii_case("pdf") {
+        Some(IngestKind::Pdf)
+    } else if ["docx", "doc", "pptx", "ppt"]
+        .iter()
+        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    {
+        Some(IngestKind::Office)
+    } else if extension.eq_ignore_ascii_case("txt") {
+        Some(IngestKind::Text)
+    } else {
+        None
+    }
+}</code></pre>
+
+        <p>
+            The enum is tiny, but it makes the rest of the program more explicit. Batch
+            mode silently skips <code>None</code>. Single-file mode turns <code>None</code>
+            into an error. Once a path is classified, a <code>match</code> forces every
+            supported kind to have a handling branch. In Java, this is the same clarity
+            you get from a small enum and a switch expression instead of a growing chain
+            of string comparisons scattered through the method.
+        </p>
+
+        <h2>Office conversion</h2>
+
+        <pre><code>fn convert_office_to_pdf(input: &amp;Path, temp_dir: &amp;tempfile::TempDir) -&gt; Result&lt;PathBuf&gt; {
+    let output = std::process::Command::new("soffice")
+        .args(["--headless", "--convert-to", "pdf", "--outdir"])
+        .arg(temp_dir.path())
+        .arg(input)
+        .output()
+        .context("soffice not found — install libreoffice-writer libreoffice-impress")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&amp;output.stderr);
+        bail!("soffice failed: {stderr}");
+    }
+
+    let pdf = temp_dir.path().join(format!(
+        "{}.pdf",
+        input.file_stem().unwrap().to_string_lossy()
+    ));
+    if !pdf.exists() {
+        bail!("soffice produced no output for {}", input.display());
+    }
+
+    Ok(pdf)
+}</code></pre>
+
+        <p>
+            Two details are worth noticing. First, the output PDF lives in a
+            <code>TempDir</code>. When the directory value drops, the converted PDF goes
+            away with it. Java can model the same lifecycle with
+            <code>Files.createTempDirectory</code> plus a <code>finally</code> cleanup,
+            but Rust makes the ownership visible in the function signature. Second,
+            LibreOffice can exit successfully without producing a PDF, so the code checks
+            the expected output file explicitly. Exit code success is not the same thing
+            as usable data.
+        </p>
+
+        <h2>One write path</h2>
+
+        <pre><code>fn process_document(
+    source_path: &amp;Path,
+    knowledge_dir: &amp;Path,
+    force_pdftotext: bool,
+    written: &amp;mut HashSet&lt;PathBuf&gt;,
+) -&gt; Result&lt;()&gt; {
+    println!("Extracting: {}", source_path.display());
+
+    let kind = ingest_kind(source_path)
+        .with_context(|| format!("unsupported input type: {}", source_path.display()))?;
+
+    let (text, used_ocr) = match kind {
+        IngestKind::Pdf =&gt; extract_pdf_text(source_path, force_pdftotext)?,
+        IngestKind::Office =&gt; {
+            let temp_dir = tempfile::tempdir().context("cannot create temp dir for Office conversion")?;
+            let pdf = convert_office_to_pdf(source_path, &amp;temp_dir)?;
+            extract_pdf_text(&amp;pdf, true)?
+        }
+        IngestKind::Text =&gt; {
+            let text = fs::read_to_string(source_path)
+                .with_context(|| format!("cannot read text file {}", source_path.display()))?;
+            (text, false)
+        }
+    };
+
+    write_document(source_path, text, used_ocr, knowledge_dir, written)
+}</code></pre>
+
+        <p>
+            <code>source_path</code> is the original document, even when the extractor
+            temporarily reads a converted PDF. That keeps provenance honest:
+            <code>title</code>, slug, and <code>resource: kuka-docs/...</code> name the
+            user's source file, not an implementation detail in <code>/tmp</code>. Text
+            files take the short path: read the string, skip OCR, and still use the same
+            cleaner and chunk writer as everything else.
+        </p>
+
+        <h2>Java equivalent</h2>
+
+        <pre><code>enum IngestKind { PDF, OFFICE, TEXT }
+
+Path tempDir = Files.createTempDirectory("office-pdf");
+try {
+    Process process = new ProcessBuilder(
+            "soffice", "--headless", "--convert-to", "pdf", "--outdir",
+            tempDir.toString(), input.toString())
+        .start();
+
+    int code = process.waitFor();
+    if (code != 0) {
+        throw new IOException("soffice failed");
+    }
+
+    Path pdf = tempDir.resolve(stripExtension(input.getFileName()) + ".pdf");
+    if (!Files.exists(pdf)) {
+        throw new IOException("soffice produced no output");
+    }
+
+    return extractPdfText(pdf);
+} finally {
+    deleteRecursively(tempDir);
+}</code></pre>
+
+        <p>
+            This is not conceptually foreign to Java. The difference is where the
+            language makes you pay attention. Java asks you to be disciplined with
+            cleanup and checked exceptions. Rust asks you to encode fallible steps in the
+            return type and lets owned temporary directories clean themselves up when
+            they leave scope.
+        </p>
+
+        <h2>Side-by-side summary</h2>
+
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>Concern</th>
+                    <th>Java world</th>
+                    <th>This Rust server</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>Office document handling</td>
+                    <td>Apache POI in process, or shell out to LibreOffice</td>
+                    <td><code>soffice --headless --convert-to pdf</code></td>
+                </tr>
+                <tr>
+                    <td>routing supported formats</td>
+                    <td><code>enum</code> plus <code>switch</code></td>
+                    <td><code>IngestKind</code> plus exhaustive <code>match</code></td>
+                </tr>
+                <tr>
+                    <td>temporary conversion output</td>
+                    <td><code>Files.createTempDirectory</code> and cleanup in <code>finally</code></td>
+                    <td><code>tempfile::TempDir</code> removes the directory on drop</td>
+                </tr>
+                <tr>
+                    <td>plain text ingestion</td>
+                    <td><code>Files.readString(path)</code></td>
+                    <td><code>fs::read_to_string(path)</code></td>
+                </tr>
+                <tr>
+                    <td>provenance</td>
+                    <td>pass original source metadata alongside converted file</td>
+                    <td><code>write_document(source_path, ...)</code></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="ask-teacher">
+            <strong>Questions?</strong> Ask Claude directly. Good questions:
+            "Why use LibreOffice instead of parsing docx with a Rust crate?",
+            "How does exhaustive match help when adding another file type?",
+            or "What bugs happen when provenance follows temporary files instead of source files?"
+        </div>
+
+        <nav class="lesson-nav">
+            <a href="refactor-13-ocr-fallback.html">← Refactor Appendix 13: OCR Fallback</a>
+            <a href="refactor-12-repetition-is-not-identity.html">← Related: Appendix 12, Cleaning Without Data Loss</a>
+        </nav>
+
+    </div>
+</body>
+
+</html>
