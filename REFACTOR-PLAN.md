@@ -56,7 +56,7 @@ cargo is not installed on the Windows host.
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
 | 6 | clean extraction + agent steering (post-plan) | complete | PR #9 merged (e601cb3, after the #8 stacked-merge mishap); lesson refactor-11 |
 | 7 | zone-based boilerplate detection (data-loss fix) | complete | PR #10 merged (b15f39e); lesson refactor-12 |
-| 8 | OCR ingestion for image-based PDFs | in progress | PR #11 open; user merge completes step |
+| 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -557,3 +557,20 @@ Newest entry last. Every status change in the dashboard gets a line here.
   Resource: kuka://docs/emergencyfirealarm-p001-006; cargo clippy
   --all-targets clean; cargo test 49/49; cargo build rebuilt target/debug.
   PR #11 opened against master; step becomes complete only after user merge.
+- 2026-07-06 — STEP 8 COMPLETE. Codex implemented per Claude's design;
+  PR #11 merged (b6cbf23). Claude post-merge review: code matches the
+  design (try_ocr via ocrmypdf --skip-text + tempfile, empty-text
+  trigger after both extractor paths, differentiated bail message, ocr
+  tag in both write paths, tempfile moved to [dependencies],
+  devcontainer postCreate + manual install done). One benign addition
+  beyond design: include_ocr_source_title prepends the file stem to
+  OCR'd body text so title terms are searchable (unit-tested).
+  VERIFIED: 49/49 tests, clippy clean, debug binary rebuilt;
+  EmergencyFireAlarm.pdf now extracts via pdf-extract→pdftotext→OCR
+  chain into 2 chunks with tags [extracted, ocr, technical-note];
+  live query "emergency fire alarm" returns the doc with page range +
+  resource URI. Known minor notes for the future: (1) OCR output of
+  diagram-heavy slides contains recognition noise (expected; fuzzy
+  matching compensates); (2) in the default path, a pdf-extract ERROR
+  (vs empty Ok) propagates before OCR can run — fine for current
+  corpus, could route errors to the fallback chain someday.
