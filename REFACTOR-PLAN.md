@@ -58,7 +58,8 @@ cargo is not installed on the Windows host.
 | 7 | zone-based boilerplate detection (data-loss fix) | complete | PR #10 merged (b15f39e); lesson refactor-12 |
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
-| 9b | diagram/image extraction + serving as MCP resources | not started | assigned to CLAUDE; unblocked (9a merged) — awaiting user approval to start |
+| 9b | diagram/image extraction + serving as MCP resources | in progress | implemented + lesson refactor-15; PR open, awaiting user merge |
+| 10 | streamable-HTTP transport (browser/remote clients) | not started | design ready: designs/step-10-streamable-http-transport.md — assigned to Codex; start only after PR #13 merged + user approval |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -641,3 +642,44 @@ Newest entry last. Every status change in the dashboard gets a line here.
   "building map and extension map.docx" (33 pages) → 2 chunks with
   correct provenance; live query returns it with page range + resource
   URI. Next: 9b (diagrams) — Claude, awaiting user approval.
+- 2026-07-06 — STEP 9B implemented on branch refactor/step-9b-diagrams
+  (user approved; Claude implementing per §9 split). extract.rs:
+  try_extract_page_images via pdfimages -png -p (size floor 10 KB drops
+  logos/header graphics, byte-hash dedupe via DefaultHasher for
+  graphics repeated across pages, cap 20/doc), images written to
+  knowledge/images/<slug>-pNNN-n.png, named after the ORIGINAL doc for
+  Office sources; failure logs a warning and never blocks ingestion.
+  OkfFrontmatter gains optional images: list; Document/DocMeta/
+  SearchHit thread it through. main.rs: hits gain "Diagrams:
+  kuka://images/..." lines; list_resources includes image resources
+  (image/png); read_resource serves base64 blobs via
+  ResourceContents::blob + with_mime_type (base64 crate added);
+  traversal guard reused; instructions updated. 53/53 tests, clippy
+  clean, debug binary rebuilt. Full re-extraction: 11/11 docs, 50
+  diagrams kept across 6 docs. Live verify: fire-alarm hit advertises
+  8 diagram URIs; resources/read returns mimeType image/png with PNG
+  magic bytes in base64; traversal attempts rejected. Docs updated
+  (USER-MANUAL capabilities/extraction/results sections), lesson
+  refactor-15-serving-diagrams written. PR opened; step complete when
+  user merges.
+- 2026-07-06 — STEP 10 DESIGNED (not started). Codex-ready design doc at
+  designs/step-10-streamable-http-transport.md: optional --http flag
+  (stdio stays the no-flag default), rmcp transport-streamable-http-server
+  feature + axum mount at /mcp, one shared Arc<RwLock<Index>> across all
+  sessions, loopback-only binding with no auth (claude.ai/public HTTPS +
+  OAuth explicitly out of scope; tunnel for testing), curl-level
+  acceptance sequence included, devcontainer port forward 8382, lesson
+  refactor-16. Committed on the open 9b branch (rides PR #13). NEXT
+  SESSION (possibly Opus): after PR #13 merges, close out 9b (dashboard
+  flip + branch cleanup), then hand the design doc to Codex for step 10
+  with user approval per protocol.
+- 2026-07-06 — 9B RIDER (user-approved, on the open PR #13 branch):
+  MAX_IMAGES_PER_DOC raised 20→40 and the cap check moved after the
+  quality filters so truncation is counted and WARNED, never silent
+  (verification had shown the building map's pages 15-33 chunk starved
+  of images at cap 20; the doc has 54 qualifying diagrams — 40 kept,
+  "skipped 14 more" now reported). 53/53 tests, clippy clean, binary
+  rebuilt, bundle re-extracted.
+- 2026-07-06 — User raised MAX_IMAGES_PER_DOC 40→60 and re-extracted the
+  building map manually: 54/54 diagrams kept, no truncation warning.
+  Committed on the PR #13 branch.

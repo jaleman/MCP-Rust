@@ -59,6 +59,11 @@ with page-level references back to the source PDFs.
   to preserve page structure; text files go straight through cleaning and
   chunking.
 - **Document listing and full-document reading** via MCP resources.
+- **Diagrams**: images embedded in the source documents are extracted at
+  ingestion (page furniture like logos is filtered out) and served as
+  `kuka://images/…` resources. Search hits list the diagrams belonging to
+  the matched section, and multimodal assistants can open and interpret
+  them alongside the text.
 - **Live reload**: add or re-extract documents and refresh the index without
   restarting the server.
 - **Fast and lightweight**: the search index is built at startup in
@@ -225,6 +230,10 @@ Done: 11 extracted, 0 failed.
   with layout preserved (`pdftotext -layout`) so their rows stay readable.
   Content that repeats *within* pages — like a lookup table printed under
   several sections — is kept in full.
+- **Diagrams are extracted too**: embedded images larger than ~10 KB (small
+  logos and header graphics are skipped, byte-identical duplicates removed,
+  capped at 20 per document) land in `knowledge/images/` and are linked to
+  their chunk's page range via `images:` frontmatter.
 - If OCR was needed, the output frontmatter includes
   `tags: [extracted, ocr, technical-note]`. That tag is a useful reminder
   that the text came from recognition rather than an original text layer.
@@ -387,6 +396,9 @@ Found 2 result(s) for 'mission status':
 - The `Resource:` line is the follow-up step: if the excerpts don't contain
   the full answer, that URI reads the whole section. Tool output never
   contains source-file paths — agents work entirely through the server.
+- A `Diagrams:` line (when present) lists `kuka://images/…` resources — the
+  images extracted from that section's pages. Ask the assistant to open one
+  ("show me that diagram") and it can view and explain the picture.
 
 ---
 

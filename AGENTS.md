@@ -20,6 +20,13 @@ log — read it before doing any planned work, and keep it updated).
   inputs, not a knowledge interface. (Reading them while developing or
   debugging the server itself is fine.)
 - After re-extracting documentation, call `reload_docs`.
+- **Diagrams**: search hits may carry `Diagrams: kuka://images/{name}` lines.
+  Read the resource to view/interpret the image yourself. When the USER asks
+  to *see* a diagram, reading it is not enough — also open the image on their
+  screen (the same PNGs live in the bundle): `code -r knowledge/images/{name}`
+  in editor sessions, otherwise the OS default viewer (`Start-Process` on
+  Windows, `xdg-open` on Linux). Clients that render MCP images inline
+  (Claude Desktop, claude.ai) need none of this.
 
 ## Build & test
 
