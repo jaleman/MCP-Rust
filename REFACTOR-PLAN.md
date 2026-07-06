@@ -680,3 +680,6 @@ Newest entry last. Every status change in the dashboard gets a line here.
   of images at cap 20; the doc has 54 qualifying diagrams — 40 kept,
   "skipped 14 more" now reported). 53/53 tests, clippy clean, binary
   rebuilt, bundle re-extracted.
+- 2026-07-06 — User raised MAX_IMAGES_PER_DOC 40→60 and re-extracted the
+  building map manually: 54/54 diagrams kept, no truncation warning.
+  Committed on the PR #13 branch.

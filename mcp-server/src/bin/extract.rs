@@ -1,6 +1,6 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
-use mcp_server::chunk::{chunk_pages, clean_extracted_text, Chunk};
+use mcp_server::chunk::{Chunk, chunk_pages, clean_extracted_text};
 use mcp_server::frontmatter::OkfFrontmatter; // shared OKF format — same module the server parses with
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -189,7 +189,7 @@ const MIN_IMAGE_BYTES: u64 = 10 * 1024;
 /// Upper bound on diagrams kept per document — protects the bundle against
 /// image-heavy documents dumping hundreds of files. Truncation is WARNED
 /// about, never silent: dropped diagrams starve later chunks of images.
-const MAX_IMAGES_PER_DOC: usize = 40;
+const MAX_IMAGES_PER_DOC: usize = 60;
 
 /// One extracted diagram: the source page it came from, and its filename
 /// under knowledge/images/.
@@ -247,7 +247,10 @@ fn try_extract_page_images(pdf: &Path, knowledge_dir: &Path, slug: &str) -> Resu
         .output()
         .context("pdfimages not found — install poppler-utils")?;
     if !output.status.success() {
-        bail!("pdfimages failed: {}", String::from_utf8_lossy(&output.stderr));
+        bail!(
+            "pdfimages failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     // Deterministic order: filenames sort by (page, image index)
@@ -518,7 +521,7 @@ fn write_output(path: &Path, content: &str, written: &mut HashSet<PathBuf>) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{extraction_tags, ingest_kind, process_document, IngestKind};
+    use super::{IngestKind, extraction_tags, ingest_kind, process_document};
     use std::collections::HashSet;
     use std::fs;
 
@@ -546,8 +549,14 @@ mod tests {
     #[test]
     fn images_field_filters_by_chunk_page_range() {
         let images = vec![
-            super::PageImage { page: 2, filename: "doc-p002-1.png".into() },
-            super::PageImage { page: 9, filename: "doc-p009-1.png".into() },
+            super::PageImage {
+                page: 2,
+                filename: "doc-p002-1.png".into(),
+            },
+            super::PageImage {
+                page: 9,
+                filename: "doc-p009-1.png".into(),
+            },
         ];
         assert_eq!(
             super::images_field(&images, 1, 6),
