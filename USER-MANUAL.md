@@ -53,6 +53,11 @@ with page-level references back to the source PDFs.
   layer, the extractor runs `ocrmypdf`, then feeds the searchable PDF back
   through the same page-preserving pipeline. OCR-derived bundle files are
   tagged with `ocr` for auditability.
+- **Native Office and text ingestion**: PDFs, Word documents (`.docx`/`.doc`),
+  PowerPoint decks (`.pptx`/`.ppt`), and plain text files (`.txt`) can all be
+  passed directly to `extract`. Office files are converted through LibreOffice
+  to preserve page structure; text files go straight through cleaning and
+  chunking.
 - **Document listing and full-document reading** via MCP resources.
 - **Live reload**: add or re-extract documents and refresh the index without
   restarting the server.
@@ -64,7 +69,7 @@ with page-level references back to the source PDFs.
 
 | Binary | Purpose |
 |--------|---------|
-| `extract` | One-time / occasional: converts PDF files into the markdown "knowledge bundle" the server reads |
+| `extract` | One-time / occasional: converts PDF, Office, and text files into the markdown "knowledge bundle" the server reads |
 | `mcp-server` | Long-running: serves the bundle to AI clients over MCP (stdio) |
 
 ---
@@ -72,21 +77,24 @@ with page-level references back to the source PDFs.
 ## 2. How it works
 
 ```
-PDF files          extract binary         knowledge bundle        mcp-server
-kuka-docs/*.pdf ──────────────────▶  knowledge/*.md      ──────────────────▶  AI client
-                 text extraction +    markdown files with      inverted index      (Claude)
-                 ~8 KB page chunking  OKF frontmatter           + MCP tools
+Source files       extract binary         knowledge bundle        mcp-server
+kuka-docs/* ─────────────────────▶  knowledge/*.md      ──────────────────▶  AI client
+PDF/Office/TXT     text extraction +    markdown files with      inverted index      (Claude)
+            ~8 KB chunking      OKF frontmatter           + MCP tools
 ```
 
-1. **Extraction**: `extract` pulls the text out of each PDF. If the PDF has
-  no text layer, it runs `ocrmypdf` once to create a searchable temporary
-  PDF, then continues through the same extraction path. The resulting text
-  is cleaned (running headers/footers, page-number markers, and
-  table-of-contents lines are stripped — they are navigation, not
-  knowledge) and written as markdown files with a metadata header (the
-  *OKF frontmatter*: title, type, source PDF, timestamp). Documents larger
-  than ~8 KB are split into chunks on page boundaries, one file per chunk,
-  so every unit is small enough for an AI agent to read comfortably.
+1. **Extraction**: `extract` pulls text from PDF, Office, or plain-text
+  source files. Office files are first converted to a temporary PDF with
+  LibreOffice, then processed exactly like PDFs so page provenance still
+  works. If a PDF or converted Office file has no text layer, `extract`
+  runs `ocrmypdf` once to create a searchable temporary PDF, then continues
+  through the same extraction path. The resulting text is cleaned (running
+  headers/footers, page-number markers, and table-of-contents lines are
+  stripped — they are navigation, not knowledge) and written as markdown
+  files with a metadata header (the *OKF frontmatter*: title, type, source
+  filename, timestamp). Documents larger than ~8 KB are split into chunks,
+  one file per chunk, so every unit is small enough for an AI agent to read
+  comfortably.
 2. **Indexing**: at startup, `mcp-server` reads every bundle file once and
    builds an inverted index (term → documents and positions). The bundle is
    trusted as already clean — everything in it is searchable.
@@ -107,6 +115,9 @@ kuka-docs/*.pdf ──────────────────▶  knowl
   layer. It wraps Tesseract and produces a searchable PDF that preserves
   pages, so the existing `pdftotext -layout` pipeline still provides page
   provenance. Already installed in newly rebuilt devcontainers.
+- **LibreOffice Writer and Impress** (`soffice`) — used for Word and
+  PowerPoint ingestion (`.docx`, `.doc`, `.pptx`, `.ppt`). Already installed
+  in newly rebuilt devcontainers.
 - **An MCP client** — Claude Code, Claude Desktop, VS Code with MCP support,
   or any other MCP-capable agent.
 
@@ -165,7 +176,7 @@ cargo test          # 42 tests should pass
 The server reads markdown files from a bundle directory (by default
 `knowledge/`). You create and update that bundle with the `extract` binary.
 
-### Extract a whole folder of PDFs
+### Extract a whole folder of documents
 
 ```bash
 # from the project root, inside the devcontainer
@@ -173,14 +184,17 @@ cargo run --release --manifest-path mcp-server/Cargo.toml --bin extract -- \
     --force-pdftotext kuka-docs knowledge
 ```
 
-- First argument: a single PDF file **or** a directory of PDFs
-  (non-PDF files are skipped; `.pdf`/`.PDF` both match).
+- First argument: a single supported document file **or** a directory of documents
+  (unsupported files are skipped; extensions are matched case-insensitively).
+  Supported inputs are `.pdf`, `.docx`, `.doc`, `.pptx`, `.ppt`, and `.txt`.
 - Second argument: the output bundle directory — it must already exist.
 - `--force-pdftotext` (recommended): skips the built-in extractor and uses
   `pdftotext` directly. This is what enables **page-accurate chunking**,
   because `pdftotext` marks page boundaries. Without the flag, the built-in
   extractor is tried first and `pdftotext` is only a fallback. In either
   mode, OCR runs automatically only if the normal extraction result is empty.
+  Office files are converted to temporary PDFs first; text files ignore this
+  flag because they do not need PDF extraction.
 
 ### What you'll see
 
@@ -195,8 +209,10 @@ Extracting: kuka-docs/EmergencyFireAlarm.pdf
   2 chunk(s):
   → knowledge/emergencyfirealarm-p001-006.md
   → knowledge/emergencyfirealarm-p007-009.md
+Extracting: kuka-docs/building map and extension map.docx
+  → knowledge/building-map-and-extension-map.md
 ...
-Done: 10 extracted, 0 failed.
+Done: 11 extracted, 0 failed.
 ```
 
 - Small documents produce **one file**; documents over ~8 KB of text are
@@ -212,28 +228,28 @@ Done: 10 extracted, 0 failed.
 - If OCR was needed, the output frontmatter includes
   `tags: [extracted, ocr, technical-note]`. That tag is a useful reminder
   that the text came from recognition rather than an original text layer.
+- Office files keep their original identity in frontmatter even though
+  LibreOffice uses a temporary PDF internally: `resource:` points to the
+  `.docx`, `.doc`, `.pptx`, or `.ppt` you provided, never to a temp file.
+- Text files are read directly, cleaned, chunked, and written as OKF
+  markdown. They do not go through LibreOffice or OCR.
 - A failure like `no text could be extracted, even after OCR` means normal
   extraction was empty and OCR also produced no usable text. If `ocrmypdf`
   is missing, the error tells you to install it. One bad PDF never aborts
   the batch.
 - Re-running extraction over the same folder simply regenerates the files —
   it is safe and idempotent. A warning is printed only if two *different*
-  PDFs would collide on the same output name.
+  source files would collide on the same output name.
 
-### Other document formats (DOCX, PPTX, …)
+### Hand-written markdown
 
-The extractor takes PDFs as input today, but the server doesn't care where
-bundle files come from — **anything in OKF markdown is indexed and served**
-(see the Appendix for the format). For other formats, until built-in support
-lands, either:
+The extractor now accepts PDF, Office, and text inputs directly, but the
+server still does not care where bundle files come from — **anything in OKF
+markdown is indexed and served** (see the Appendix for the format). You can
+write bundle files by hand for content that never existed as a source
+document: FAQs, procedures, tribal knowledge, or short internal notes.
 
-- convert to markdown with **pandoc** (`pandoc report.docx -t gfm`), add the
-  OKF frontmatter header, and drop the file into the bundle; or
-- write bundle files by hand for content that never existed as a document
-  (FAQs, procedures, tribal knowledge).
-
-Run `reload_docs` (Section 8) after adding files either way. Native
-DOCX/PPTX ingestion via pandoc is on the roadmap (see REFACTOR-PLAN.md).
+Run `reload_docs` (Section 8) after adding files either way.
 
 ---
 
@@ -376,9 +392,9 @@ Found 2 result(s) for 'mission status':
 
 ## 8. Keeping the bundle up to date
 
-When documentation changes or you add new PDFs:
+When documentation changes or you add new source files:
 
-1. Drop the new/updated PDFs into your PDF folder (e.g. `kuka-docs/`).
+1. Drop the new/updated files into your source folder (e.g. `kuka-docs/`).
 2. Re-run the extractor (Section 5).
 3. Tell your assistant: *"reload the KUKA docs"* — it calls `reload_docs`
    and reports the new document/term counts. No restart needed.
@@ -413,6 +429,8 @@ Starting KUKA MCP server: indexed 12 document(s), 1051 unique term(s) in 23.0ms 
 | Server won't start; log says `knowledge directory not found: ... — set KUKA_KNOWLEDGE_DIR or run from the project root` | The bundle path doesn't resolve from the client's working directory | Set `KUKA_KNOWLEDGE_DIR` to an absolute path in the client config, or set the working directory (e.g. `docker exec -w …`) |
 | `no text could be extracted, even after OCR` during extraction | The PDF has no text layer and OCR produced no usable text | Confirm `ocrmypdf` is installed and that the scan is readable; then re-run extraction |
 | `ocrmypdf not found — install ocrmypdf` during extraction | The running environment was not rebuilt after OCR support was added, or `ocrmypdf` is not on `PATH` | Install `ocrmypdf` (`sudo apt-get install -y ocrmypdf`) or rebuild the devcontainer |
+| `soffice not found — install libreoffice-writer libreoffice-impress` during Office extraction | LibreOffice is not installed in the running environment | Install `libreoffice-writer libreoffice-impress` or rebuild the devcontainer |
+| `soffice produced no output for ...` during Office extraction | LibreOffice accepted the command but did not write the converted PDF | Check that the source Office file opens correctly; try saving it again and rerun extraction |
 | "No results found" for a query that should match | AND semantics: one of your terms appears nowhere in the bundle | Remove the rarest word; check `list_docs` to confirm the document was extracted |
 | Search results answer from old content after re-extracting | Index still reflects the previous bundle | Ask the assistant to *"reload the KUKA docs"* |
 | Excerpts look truncated or garbled | Bundle files changed on disk after the index was built | Same fix: `reload_docs` |
@@ -447,7 +465,7 @@ timestamp: 2026-07-04T21:37:13.595435146Z
 |-------|---------|
 | `type` | Grouping key used by `list_docs` |
 | `title` | Display title in listings and search results |
-| `resource` | The source PDF this text came from |
+| `resource` | The original source file this text came from (`.pdf`, `.docx`, `.pptx`, `.txt`, etc.) |
 | `parent` / `pages` | Only on chunks: the parent document's slug and the source page range |
 | `tags` | Provenance tags. OCR-derived files include `ocr`: `[extracted, ocr, technical-note]` |
 | `timestamp` | When the extraction ran |

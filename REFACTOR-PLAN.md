@@ -57,7 +57,7 @@ cargo is not installed on the Windows host.
 | 6 | clean extraction + agent steering (post-plan) | complete | PR #9 merged (e601cb3, after the #8 stacked-merge mishap); lesson refactor-11 |
 | 7 | zone-based boilerplate detection (data-loss fix) | complete | PR #10 merged (b15f39e); lesson refactor-12 |
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
-| 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | not started | assigned to CODEX (design from Claude); see §9 |
+| 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | in progress | PR #12 open; user merge completes step |
 | 9b | diagram/image extraction + serving as MCP resources | not started | assigned to CLAUDE; BLOCKED until 9a merges (both touch extract.rs — strictly sequential) |
 
 ## Resuming mid-step (handoff protocol)
@@ -598,3 +598,33 @@ Newest entry last. Every status change in the dashboard gets a line here.
   matching compensates); (2) in the default path, a pdf-extract ERROR
   (vs empty Ok) propagates before OCR can run — fine for current
   corpus, could route errors to the fallback chain someday.
+- 2026-07-06 — STEP 9A STARTED on branch
+  refactor/step-9a-office-ingestion after confirming master contains the
+  9a dashboard row from f1f1c0b and Step 8 is complete. Scope: route
+  PDF/Office/Text inputs in extract.rs; convert Office docs to temporary
+  PDFs via soffice and reuse the existing PDF text/OCR pipeline; ingest
+  TXT directly through clean/chunk/write; preserve original source
+  filename in frontmatter; update devcontainer, USER-MANUAL, and lesson
+  refactor-14. Hard boundary: do not touch main.rs, index.rs,
+  frontmatter.rs, or chunk.rs. Current compile/test status: not yet run
+  on this branch. Next action: implement extension routing and shared
+  write path.
+- 2026-07-06 — STEP 9A IMPLEMENTED on branch
+  refactor/step-9a-office-ingestion. Code changes are confined to
+  extract.rs: added IngestKind routing for pdf/docx/doc/pptx/ppt/txt;
+  Office docs convert through soffice into a TempDir PDF and then use
+  pdftotext/OCR/clean/chunk/write with original source provenance; TXT
+  reads directly and uses the same clean/chunk/write tail; unsupported
+  files still skip silently in batch mode and error in single-file mode.
+  Devcontainer now installs libreoffice-writer + libreoffice-impress.
+  Docs: USER-MANUAL updated and lesson refactor-14-office-ingestion
+  written. Verification: LibreOffice 25.2.3.2 installed in running
+  container; real DOCX "building map and extension map.docx" extracts
+  into page-ranged chunks with resource: kuka-docs/building map and
+  extension map.docx; full-directory extraction reported 11 extracted,
+  0 failed; reload_docs reported 18 docs / 1551 terms; live
+  search_docs("mapping route loop closure") returned the DOCX-derived
+  chunk with Resource: kuka://docs/building-map-and-extension-map-p001-014;
+  cargo clippy --all-targets clean; cargo test 51/51; cargo build
+  rebuilt target/debug. PR #12 opened against master; step completes only
+  after user merge.

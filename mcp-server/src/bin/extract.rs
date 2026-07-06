@@ -3,6 +3,7 @@ use clap::Parser;
 use mcp_server::chunk::{chunk_pages, clean_extracted_text, Chunk};
 use mcp_server::frontmatter::OkfFrontmatter; // shared OKF format — same module the server parses with
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 // CLI argument definition — clap reads these field types and doc comments
@@ -10,11 +11,11 @@ use std::path::{Path, PathBuf};
 #[derive(Parser)]
 #[command(
     name    = "extract",
-    about   = "Extracts KUKA PDFs to OKF markdown files",
+    about   = "Extracts KUKA documents to OKF markdown files",
     version                      // reads version from Cargo.toml automatically
 )]
 struct Args {
-    /// A single PDF file or a directory of PDFs
+    /// A single document file or a directory of documents
     input: String,
 
     /// The knowledge/ directory to write OKF files into
@@ -23,6 +24,13 @@ struct Args {
     /// Skip pdf-extract and go straight to pdftotext
     #[arg(long)]
     force_pdftotext: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IngestKind {
+    Pdf,
+    Office,
+    Text,
 }
 
 fn main() {
@@ -42,19 +50,19 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Every file written during this run. Two different PDFs whose names
+    // Every file written during this run. Two different source files whose names
     // differ only in stripped punctuation produce the same slug — the second
     // would silently overwrite the first without this check.
     let mut written: HashSet<PathBuf> = HashSet::new();
 
     if input.is_file() {
         // Single-file mode — exit non-zero on failure so callers can detect it
-        if let Err(e) = process_pdf(input, knowledge_dir, args.force_pdftotext, &mut written) {
+        if let Err(e) = process_document(input, knowledge_dir, args.force_pdftotext, &mut written) {
             eprintln!("Error: {e}");
             std::process::exit(1);
         }
     } else if input.is_dir() {
-        // Batch mode — process every PDF, logging failures and continuing
+        // Batch mode — process every supported document, logging failures and continuing
         let entries = std::fs::read_dir(input).unwrap_or_else(|e| {
             eprintln!("Cannot read directory: {e}");
             std::process::exit(1);
@@ -66,17 +74,13 @@ fn main() {
         for entry in entries.flatten() {
             let path = entry.path();
 
-            // Skip non-PDF files silently (case-insensitive: FILE.PDF counts)
-            let is_pdf = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
-            if !is_pdf {
+            // Skip unsupported files silently in batch mode.
+            if ingest_kind(&path).is_none() {
                 continue;
             }
 
             // Match on the result so one bad PDF does not abort the batch
-            match process_pdf(&path, knowledge_dir, args.force_pdftotext, &mut written) {
+            match process_document(&path, knowledge_dir, args.force_pdftotext, &mut written) {
                 Ok(()) => ok += 1,
                 Err(e) => {
                     eprintln!("Skipping {}: {e}", path.display());
@@ -89,6 +93,22 @@ fn main() {
     } else {
         eprintln!("Input path not found: {}", input.display());
         std::process::exit(1);
+    }
+}
+
+fn ingest_kind(path: &Path) -> Option<IngestKind> {
+    let extension = path.extension()?.to_str()?;
+    if extension.eq_ignore_ascii_case("pdf") {
+        Some(IngestKind::Pdf)
+    } else if ["docx", "doc", "pptx", "ppt"]
+        .iter()
+        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+    {
+        Some(IngestKind::Office)
+    } else if extension.eq_ignore_ascii_case("txt") {
+        Some(IngestKind::Text)
+    } else {
+        None
     }
 }
 
@@ -136,6 +156,30 @@ fn try_ocr(pdf_path: &Path) -> Result<String> {
     try_pdftotext(temp.path())
 }
 
+fn convert_office_to_pdf(input: &Path, temp_dir: &tempfile::TempDir) -> Result<PathBuf> {
+    let output = std::process::Command::new("soffice")
+        .args(["--headless", "--convert-to", "pdf", "--outdir"])
+        .arg(temp_dir.path())
+        .arg(input)
+        .output()
+        .context("soffice not found — install libreoffice-writer libreoffice-impress")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("soffice failed: {stderr}");
+    }
+
+    let pdf = temp_dir.path().join(format!(
+        "{}.pdf",
+        input.file_stem().unwrap().to_string_lossy()
+    ));
+    if !pdf.exists() {
+        bail!("soffice produced no output for {}", input.display());
+    }
+
+    Ok(pdf)
+}
+
 fn extraction_tags(used_ocr: bool) -> &'static str {
     if used_ocr {
         "[extracted, ocr, technical-note]"
@@ -152,26 +196,19 @@ fn include_ocr_source_title(stem: &str, text: &str) -> String {
 // files. Documents that fit in one chunk (~8 KB) produce a single file exactly
 // as before; larger documents produce one file per chunk with parent/pages
 // frontmatter so search hits carry page-level provenance.
-fn process_pdf(
-    pdf_path: &Path,
-    knowledge_dir: &Path,
-    force_pdftotext: bool,
-    written: &mut HashSet<PathBuf>,
-) -> Result<()> {
-    println!("Extracting: {}", pdf_path.display());
-
+fn extract_pdf_text(extract_path: &Path, force_pdftotext: bool) -> Result<(String, bool)> {
     // Try pdf-extract first — unless the caller forced pdftotext.
     // Note: only pdftotext emits form-feed page separators, so page-accurate
     // chunking needs --force-pdftotext; pdf-extract output falls back to
     // paragraph-based splitting for oversized documents.
     let mut text = if force_pdftotext {
-        try_pdftotext(pdf_path)?
+        try_pdftotext(extract_path)?
     } else {
-        let extracted = pdf_extract::extract_text(pdf_path)?;
+        let extracted = pdf_extract::extract_text(extract_path)?;
         if extracted.trim().is_empty() {
             // pdf-extract returned nothing — fall back to pdftotext
             println!("  pdf-extract returned empty text — trying pdftotext…");
-            try_pdftotext(pdf_path)?
+            try_pdftotext(extract_path)?
         } else {
             extracted
         }
@@ -179,15 +216,56 @@ fn process_pdf(
 
     let used_ocr = if text.trim().is_empty() {
         println!("  no text layer — running OCR…");
-        text = try_ocr(pdf_path)?;
+        text = try_ocr(extract_path)?;
         true
     } else {
         false
     };
 
+    Ok((text, used_ocr))
+}
+
+fn process_document(
+    source_path: &Path,
+    knowledge_dir: &Path,
+    force_pdftotext: bool,
+    written: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    println!("Extracting: {}", source_path.display());
+
+    let kind = ingest_kind(source_path)
+        .with_context(|| format!("unsupported input type: {}", source_path.display()))?;
+
+    let (text, used_ocr) = match kind {
+        IngestKind::Pdf => extract_pdf_text(source_path, force_pdftotext)?,
+        IngestKind::Office => {
+            let temp_dir =
+                tempfile::tempdir().context("cannot create temp dir for Office conversion")?;
+            let pdf = convert_office_to_pdf(source_path, &temp_dir)?;
+            // LibreOffice gives us a page-shaped PDF; use pdftotext so form-feed
+            // page separators survive into the existing chunking pipeline.
+            extract_pdf_text(&pdf, true)?
+        }
+        IngestKind::Text => {
+            let text = fs::read_to_string(source_path)
+                .with_context(|| format!("cannot read text file {}", source_path.display()))?;
+            (text, false)
+        }
+    };
+
+    write_document(source_path, text, used_ocr, knowledge_dir, written)
+}
+
+fn write_document(
+    source_path: &Path,
+    mut text: String,
+    used_ocr: bool,
+    knowledge_dir: &Path,
+    written: &mut HashSet<PathBuf>,
+) -> Result<()> {
     // Build the output filename: lowercase with spaces replaced by dashes
-    let stem = pdf_path.file_stem().unwrap().to_string_lossy();
-    let filename = pdf_path.file_name().unwrap().to_string_lossy();
+    let stem = source_path.file_stem().unwrap().to_string_lossy();
+    let filename = source_path.file_name().unwrap().to_string_lossy();
     let slug = stem
         .to_lowercase()
         .replace(' ', "-")
@@ -270,7 +348,7 @@ fn process_pdf(
 }
 
 // Writes one OKF file, warning when a file written EARLIER IN THIS RUN is
-// about to be clobbered (two PDFs collapsing to the same slug). Overwriting
+// about to be clobbered (two source files collapsing to the same slug). Overwriting
 // files from a previous run is normal re-extraction and stays silent.
 fn write_output(path: &Path, content: &str, written: &mut HashSet<PathBuf>) -> Result<()> {
     if !written.insert(path.to_path_buf()) {
@@ -286,7 +364,9 @@ fn write_output(path: &Path, content: &str, written: &mut HashSet<PathBuf>) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::extraction_tags;
+    use super::{extraction_tags, ingest_kind, process_document, IngestKind};
+    use std::collections::HashSet;
+    use std::fs;
 
     #[test]
     fn extraction_tags_include_ocr_only_when_ocr_was_used() {
@@ -300,5 +380,44 @@ mod tests {
             super::include_ocr_source_title("EmergencyFireAlarm", "Alarm body"),
             "EmergencyFireAlarm\n\nAlarm body"
         );
+    }
+
+    #[test]
+    fn ingest_kind_routes_supported_extensions_case_insensitively() {
+        assert_eq!(ingest_kind("manual.PDF".as_ref()), Some(IngestKind::Pdf));
+        assert_eq!(ingest_kind("note.docx".as_ref()), Some(IngestKind::Office));
+        assert_eq!(ingest_kind("legacy.DOC".as_ref()), Some(IngestKind::Office));
+        assert_eq!(
+            ingest_kind("slides.pptx".as_ref()),
+            Some(IngestKind::Office)
+        );
+        assert_eq!(ingest_kind("deck.PPT".as_ref()), Some(IngestKind::Office));
+        assert_eq!(
+            ingest_kind("procedure.Txt".as_ref()),
+            Some(IngestKind::Text)
+        );
+        assert_eq!(ingest_kind("image.png".as_ref()), None);
+    }
+
+    #[test]
+    fn text_file_ingestion_writes_okf_with_original_resource() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("Fleet Procedure.txt");
+        let output_dir = temp.path().join("knowledge");
+        fs::create_dir(&output_dir).unwrap();
+        fs::write(
+            &input,
+            "Fleet handoff procedure\n\nConfirm the mission queue before releasing the AMR.",
+        )
+        .unwrap();
+
+        let mut written = HashSet::new();
+        process_document(&input, &output_dir, false, &mut written).unwrap();
+
+        let output = fs::read_to_string(output_dir.join("fleet-procedure.md")).unwrap();
+        assert!(output.contains("title: Fleet Procedure"));
+        assert!(output.contains("resource: kuka-docs/Fleet Procedure.txt"));
+        assert!(output.contains("tags: [extracted, technical-note]"));
+        assert!(output.contains("Confirm the mission queue before releasing the AMR."));
     }
 }
