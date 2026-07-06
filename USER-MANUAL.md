@@ -49,6 +49,10 @@ with page-level references back to the source PDFs.
   search results show content, not navigation noise. Content that repeats
   *inside* pages (a lookup table printed under several sections) is
   deliberately preserved.
+- **OCR fallback for image-only PDFs**: when normal extraction finds no text
+  layer, the extractor runs `ocrmypdf`, then feeds the searchable PDF back
+  through the same page-preserving pipeline. OCR-derived bundle files are
+  tagged with `ocr` for auditability.
 - **Document listing and full-document reading** via MCP resources.
 - **Live reload**: add or re-extract documents and refresh the index without
   restarting the server.
@@ -74,13 +78,15 @@ kuka-docs/*.pdf ──────────────────▶  knowl
                  ~8 KB page chunking  OKF frontmatter           + MCP tools
 ```
 
-1. **Extraction**: `extract` pulls the text out of each PDF, cleans it
-   (running headers/footers, page-number markers, and table-of-contents
-   lines are stripped — they are navigation, not knowledge), and writes it
-   as markdown files with a metadata header (the *OKF frontmatter*: title,
-   type, source PDF, timestamp). Documents larger than ~8 KB are split into
-   chunks on page boundaries, one file per chunk, so every unit is small
-   enough for an AI agent to read comfortably.
+1. **Extraction**: `extract` pulls the text out of each PDF. If the PDF has
+  no text layer, it runs `ocrmypdf` once to create a searchable temporary
+  PDF, then continues through the same extraction path. The resulting text
+  is cleaned (running headers/footers, page-number markers, and
+  table-of-contents lines are stripped — they are navigation, not
+  knowledge) and written as markdown files with a metadata header (the
+  *OKF frontmatter*: title, type, source PDF, timestamp). Documents larger
+  than ~8 KB are split into chunks on page boundaries, one file per chunk,
+  so every unit is small enough for an AI agent to read comfortably.
 2. **Indexing**: at startup, `mcp-server` reads every bundle file once and
    builds an inverted index (term → documents and positions). The bundle is
    trusted as already clean — everything in it is searchable.
@@ -97,10 +103,12 @@ kuka-docs/*.pdf ──────────────────▶  knowl
   devcontainer.
 - **poppler-utils** (`pdftotext`) — used for PDF extraction. Required for
   page-accurate chunking; already installed in the devcontainer.
+- **ocrmypdf** — used only as a fallback when a PDF has no extractable text
+  layer. It wraps Tesseract and produces a searchable PDF that preserves
+  pages, so the existing `pdftotext -layout` pipeline still provides page
+  provenance. Already installed in newly rebuilt devcontainers.
 - **An MCP client** — Claude Code, Claude Desktop, VS Code with MCP support,
   or any other MCP-capable agent.
-- PDFs must contain a **text layer**. Scanned/image-only PDFs cannot be
-  extracted (the extractor will tell you so) — run them through OCR first.
 
 ---
 
@@ -171,7 +179,8 @@ cargo run --release --manifest-path mcp-server/Cargo.toml --bin extract -- \
 - `--force-pdftotext` (recommended): skips the built-in extractor and uses
   `pdftotext` directly. This is what enables **page-accurate chunking**,
   because `pdftotext` marks page boundaries. Without the flag, the built-in
-  extractor is tried first and `pdftotext` is only a fallback.
+  extractor is tried first and `pdftotext` is only a fallback. In either
+  mode, OCR runs automatically only if the normal extraction result is empty.
 
 ### What you'll see
 
@@ -181,8 +190,13 @@ Extracting: kuka-docs/KUKA Technical Note-MQTT Payload Definitions_Ver1.1.9.pdf
   → knowledge/kuka-technical-note-mqtt-payload-definitions_ver119-p001-008.md
   → knowledge/kuka-technical-note-mqtt-payload-definitions_ver119-p009-016.md
   → knowledge/kuka-technical-note-mqtt-payload-definitions_ver119-p017-024.md
+Extracting: kuka-docs/EmergencyFireAlarm.pdf
+  no text layer — running OCR…
+  2 chunk(s):
+  → knowledge/emergencyfirealarm-p001-006.md
+  → knowledge/emergencyfirealarm-p007-009.md
 ...
-Done: 9 extracted, 1 failed.
+Done: 10 extracted, 0 failed.
 ```
 
 - Small documents produce **one file**; documents over ~8 KB of text are
@@ -195,9 +209,13 @@ Done: 9 extracted, 1 failed.
   with layout preserved (`pdftotext -layout`) so their rows stay readable.
   Content that repeats *within* pages — like a lookup table printed under
   several sections — is kept in full.
-- A failure like `no text could be extracted (image-only or empty PDF?)`
-  means the PDF has no text layer (it's a scan). OCR it first, or accept
-  that it won't be searchable. One bad PDF never aborts the batch.
+- If OCR was needed, the output frontmatter includes
+  `tags: [extracted, ocr, technical-note]`. That tag is a useful reminder
+  that the text came from recognition rather than an original text layer.
+- A failure like `no text could be extracted, even after OCR` means normal
+  extraction was empty and OCR also produced no usable text. If `ocrmypdf`
+  is missing, the error tells you to install it. One bad PDF never aborts
+  the batch.
 - Re-running extraction over the same folder simply regenerates the files —
   it is safe and idempotent. A warning is printed only if two *different*
   PDFs would collide on the same output name.
@@ -393,7 +411,8 @@ Starting KUKA MCP server: indexed 12 document(s), 1051 unique term(s) in 23.0ms 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Server won't start; log says `knowledge directory not found: ... — set KUKA_KNOWLEDGE_DIR or run from the project root` | The bundle path doesn't resolve from the client's working directory | Set `KUKA_KNOWLEDGE_DIR` to an absolute path in the client config, or set the working directory (e.g. `docker exec -w …`) |
-| `no text could be extracted (image-only or empty PDF?)` during extraction | The PDF is a scan with no text layer | OCR the PDF first (e.g. `ocrmypdf`), then re-extract |
+| `no text could be extracted, even after OCR` during extraction | The PDF has no text layer and OCR produced no usable text | Confirm `ocrmypdf` is installed and that the scan is readable; then re-run extraction |
+| `ocrmypdf not found — install ocrmypdf` during extraction | The running environment was not rebuilt after OCR support was added, or `ocrmypdf` is not on `PATH` | Install `ocrmypdf` (`sudo apt-get install -y ocrmypdf`) or rebuild the devcontainer |
 | "No results found" for a query that should match | AND semantics: one of your terms appears nowhere in the bundle | Remove the rarest word; check `list_docs` to confirm the document was extracted |
 | Search results answer from old content after re-extracting | Index still reflects the previous bundle | Ask the assistant to *"reload the KUKA docs"* |
 | Excerpts look truncated or garbled | Bundle files changed on disk after the index was built | Same fix: `reload_docs` |
@@ -430,6 +449,7 @@ timestamp: 2026-07-04T21:37:13.595435146Z
 | `title` | Display title in listings and search results |
 | `resource` | The source PDF this text came from |
 | `parent` / `pages` | Only on chunks: the parent document's slug and the source page range |
+| `tags` | Provenance tags. OCR-derived files include `ocr`: `[extracted, ocr, technical-note]` |
 | `timestamp` | When the extraction ran |
 
 You can also write bundle files **by hand** (meeting notes, FAQs, internal

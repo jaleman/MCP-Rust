@@ -56,7 +56,7 @@ cargo is not installed on the Windows host.
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
 | 6 | clean extraction + agent steering (post-plan) | complete | PR #9 merged (e601cb3, after the #8 stacked-merge mishap); lesson refactor-11 |
 | 7 | zone-based boilerplate detection (data-loss fix) | complete | PR #10 merged (b15f39e); lesson refactor-12 |
-| 8 | OCR ingestion for image-based PDFs | not started | NEXT STEP (user request 2026-07-05) — see §8 |
+| 8 | OCR ingestion for image-based PDFs | in progress | PR #11 open; user merge completes step |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -267,7 +267,7 @@ repeats too. Repetition is not identity; POSITION is the discriminator.
   in the excerpt; "RobotType valid values" returns the retry hint (honest —
   those words are absent), demonstrating steps 6+7 composing.
 
-## Step 8 — OCR ingestion for image-based PDFs (NEXT STEP, user-requested 2026-07-05)
+## Step 8 — OCR ingestion for image-based PDFs (in progress, user-requested 2026-07-05)
 
 Goal: make image-based PDFs searchable — documents exported from PowerPoint
 and similar render their text as images, so pdftotext gets nothing. Concrete
@@ -532,3 +532,28 @@ Newest entry last. Every status change in the dashboard gets a line here.
   refactor/step-8-ocr-ingestion; house rules apply (PR to master, user
   merges, docs + lesson refactor-13 in same commit, devcontainer-only
   cargo, rebuild debug binary).
+- 2026-07-06 — STEP 8 STARTED on branch refactor/step-8-ocr-ingestion
+  after user confirmation that master contains the Step 8 plan section
+  and Step 7 is complete. Scope: add ocrmypdf fallback in extract.rs
+  only when normal extraction yields empty text; move tempfile to runtime
+  dependencies; install/document ocrmypdf; re-extract EmergencyFireAlarm;
+  verify clippy/tests/build plus live search_docs; write lesson
+  refactor-13-ocr-fallback. Current compile/test status: not yet run on
+  this branch. Next action: implement the extractor fallback and focused
+  tests.
+- 2026-07-06 — STEP 8 IMPLEMENTED on branch
+  refactor/step-8-ocr-ingestion. Code: extract.rs now falls back to
+  ocrmypdf only when raw normal extraction is empty, extracts the OCR PDF
+  through existing pdftotext/clean/chunk/write flow, tags OCR output as
+  [extracted, ocr, technical-note], and prefixes OCR body text with the
+  source title so title-only terms such as "fire" are searchable without
+  changing the server/index. Cargo.toml moves tempfile to runtime deps;
+  devcontainer installs ocrmypdf. Docs: USER-MANUAL updated; lesson
+  refactor-13-ocr-fallback written. Verification: ocrmypdf 16.7.0
+  installed in running container; EmergencyFireAlarm.pdf re-extracted to
+  knowledge/emergencyfirealarm-p001-006.md and -p007-009.md with non-empty
+  OCR bodies and OCR tags; reload_docs reported 16 docs / 1240 terms;
+  live search_docs("fire alarm") returned EmergencyFireAlarm with
+  Resource: kuka://docs/emergencyfirealarm-p001-006; cargo clippy
+  --all-targets clean; cargo test 49/49; cargo build rebuilt target/debug.
+  PR #11 opened against master; step becomes complete only after user merge.
