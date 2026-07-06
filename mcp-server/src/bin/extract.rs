@@ -187,8 +187,9 @@ fn convert_office_to_pdf(input: &Path, temp_dir: &tempfile::TempDir) -> Result<P
 const MIN_IMAGE_BYTES: u64 = 10 * 1024;
 
 /// Upper bound on diagrams kept per document — protects the bundle against
-/// image-heavy documents dumping hundreds of files.
-const MAX_IMAGES_PER_DOC: usize = 20;
+/// image-heavy documents dumping hundreds of files. Truncation is WARNED
+/// about, never silent: dropped diagrams starve later chunks of images.
+const MAX_IMAGES_PER_DOC: usize = 40;
 
 /// One extracted diagram: the source page it came from, and its filename
 /// under knowledge/images/.
@@ -259,11 +260,9 @@ fn try_extract_page_images(pdf: &Path, knowledge_dir: &Path, slug: &str) -> Resu
     let mut seen_hashes: HashSet<u64> = HashSet::new();
     let mut per_page_counter: HashMap<usize, usize> = HashMap::new();
     let mut images: Vec<PageImage> = Vec::new();
+    let mut skipped_over_cap = 0usize;
 
     for candidate in candidates {
-        if images.len() >= MAX_IMAGES_PER_DOC {
-            break;
-        }
         let Some(name) = candidate.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
@@ -282,12 +281,26 @@ fn try_extract_page_images(pdf: &Path, knowledge_dir: &Path, slug: &str) -> Resu
             continue;
         }
 
+        // Cap check AFTER the quality filters, so the skip count reflects
+        // real diagrams lost — and the loss is reported, never silent.
+        if images.len() >= MAX_IMAGES_PER_DOC {
+            skipped_over_cap += 1;
+            continue;
+        }
+
         let n = per_page_counter.entry(page).or_insert(0);
         *n += 1;
         let filename = format!("{slug}-p{page:03}-{n}.png");
         fs::write(images_dir.join(&filename), &bytes)
             .with_context(|| format!("cannot write {filename}"))?;
         images.push(PageImage { page, filename });
+    }
+
+    if skipped_over_cap > 0 {
+        eprintln!(
+            "  WARNING: kept {MAX_IMAGES_PER_DOC} diagrams, skipped {skipped_over_cap} more \
+             (raise MAX_IMAGES_PER_DOC in extract.rs if those pages matter)"
+        );
     }
 
     Ok(images)

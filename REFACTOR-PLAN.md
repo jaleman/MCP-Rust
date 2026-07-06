@@ -673,3 +673,10 @@ Newest entry last. Every status change in the dashboard gets a line here.
   SESSION (possibly Opus): after PR #13 merges, close out 9b (dashboard
   flip + branch cleanup), then hand the design doc to Codex for step 10
   with user approval per protocol.
+- 2026-07-06 — 9B RIDER (user-approved, on the open PR #13 branch):
+  MAX_IMAGES_PER_DOC raised 20→40 and the cap check moved after the
+  quality filters so truncation is counted and WARNED, never silent
+  (verification had shown the building map's pages 15-33 chunk starved
+  of images at cap 20; the doc has 54 qualifying diagrams — 40 kept,
+  "skipped 14 more" now reported). 53/53 tests, clippy clean, binary
+  rebuilt, bundle re-extracted.
