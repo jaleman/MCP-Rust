@@ -20,6 +20,12 @@ it before doing any planned work, and keep it updated).
   inputs, not a knowledge interface. (Reading them while developing or
   debugging the server itself is of course fine.)
 - After re-extracting documentation, call `reload_docs`.
+- **Diagrams**: search hits may carry `Diagrams: kuka://images/{name}` lines.
+  Read the resource to view/interpret the image yourself. When the USER asks
+  to *see* a diagram, reading it is not enough — the chat panel shows only a
+  link. Also open the image on their screen:
+  `code -r knowledge/images/{name}` (the same PNGs live in the bundle), which
+  displays it in a VS Code image tab.
 
 ## Build & test
 
