@@ -57,6 +57,8 @@ cargo is not installed on the Windows host.
 | 6 | clean extraction + agent steering (post-plan) | complete | PR #9 merged (e601cb3, after the #8 stacked-merge mishap); lesson refactor-11 |
 | 7 | zone-based boilerplate detection (data-loss fix) | complete | PR #10 merged (b15f39e); lesson refactor-12 |
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
+| 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | not started | assigned to CODEX (design from Claude); see §9 |
+| 9b | diagram/image extraction + serving as MCP resources | not started | assigned to CLAUDE; BLOCKED until 9a merges (both touch extract.rs — strictly sequential) |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -284,6 +286,28 @@ Suggested approach (design when starting, per protocol ask user first):
   since OCR text can contain recognition errors; the fuzzy matcher already
   tolerates 1-2 char errors, which helps.
 - Verify: re-extract EmergencyFireAlarm.pdf, live query about its content.
+
+## Step 9 — Office/text ingestion (9a) + diagrams (9b), approved 2026-07-06
+
+User-approved scope, split across two agents; COORDINATION RULE: strictly
+sequential (9a merges before 9b starts) because both touch extract.rs.
+The dashboard + progress log in this file are the coordination channel:
+each agent flips its row and logs start/finish per the standing protocol.
+
+**9a (Codex):** extract accepts .docx/.pptx/.doc/.ppt via LibreOffice
+headless → temp PDF → the EXISTING pipeline (pdftotext/OCR/clean/chunk,
+page provenance intact), and .txt directly (read → clean → chunk; no
+pages). Provenance (title/slug/resource frontmatter) must reference the
+ORIGINAL file, not the temp PDF. Must NOT implement any image/diagram
+handling. Acceptance: the user's .docx in kuka-docs extracts and is
+answerable via search_docs. Devcontainer gains libreoffice-writer +
+libreoffice-impress. Lesson refactor-14.
+
+**9b (Claude):** per-page image extraction (pdftoppm/pdfimages) into
+knowledge/images/, images: frontmatter per chunk, kuka://images/
+blob resources, "Diagrams:" lines in search hits. Multimodal agents can
+then read and interpret diagrams alongside text. Lesson refactor-15.
+Future roadmap note: vision-model captions to make diagrams searchable.
 
 ## Step 5c — Escape hatch (designed in, not built)
 
