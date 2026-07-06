@@ -57,8 +57,8 @@ cargo is not installed on the Windows host.
 | 6 | clean extraction + agent steering (post-plan) | complete | PR #9 merged (e601cb3, after the #8 stacked-merge mishap); lesson refactor-11 |
 | 7 | zone-based boilerplate detection (data-loss fix) | complete | PR #10 merged (b15f39e); lesson refactor-12 |
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
-| 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | in progress | PR #12 open; user merge completes step |
-| 9b | diagram/image extraction + serving as MCP resources | not started | assigned to CLAUDE; BLOCKED until 9a merges (both touch extract.rs — strictly sequential) |
+| 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
+| 9b | diagram/image extraction + serving as MCP resources | not started | assigned to CLAUDE; unblocked (9a merged) — awaiting user approval to start |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -628,3 +628,16 @@ Newest entry last. Every status change in the dashboard gets a line here.
   cargo clippy --all-targets clean; cargo test 51/51; cargo build
   rebuilt target/debug. PR #12 opened against master; step completes only
   after user merge.
+- 2026-07-06 — STEP 9A COMPLETE. Codex implemented per Claude's design;
+  PR #12 merged (0a035ab). Claude post-merge review: matches design —
+  IngestKind routing (pdf/docx/doc/pptx/ppt/txt, case-insensitive,
+  unit-tested), convert_office_to_pdf via soffice headless (existence
+  check for silent-failure case), write_document extracted with source
+  identity from the ORIGINAL file (resource: points at the .docx, not
+  the temp PDF), txt path reads directly, Office path forces pdftotext
+  so page separators survive into chunking (good judgement call). No
+  scope creep into 9b territory. VERIFIED: 51/51 tests (4 extract bin
+  tests), clippy clean, soffice installed, debug binary rebuilt;
+  "building map and extension map.docx" (33 pages) → 2 chunks with
+  correct provenance; live query returns it with page range + resource
+  URI. Next: 9b (diagrams) — Claude, awaiting user approval.
