@@ -2,8 +2,10 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use mcp_server::chunk::{chunk_pages, clean_extracted_text, Chunk};
 use mcp_server::frontmatter::OkfFrontmatter; // shared OKF format — same module the server parses with
-use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 // CLI argument definition — clap reads these field types and doc comments
@@ -180,6 +182,132 @@ fn convert_office_to_pdf(input: &Path, temp_dir: &tempfile::TempDir) -> Result<P
     Ok(pdf)
 }
 
+/// Embedded images smaller than this are page furniture (logos, bullets,
+/// header graphics — the KUKA header logo is ~2-5 KB), not diagrams.
+const MIN_IMAGE_BYTES: u64 = 10 * 1024;
+
+/// Upper bound on diagrams kept per document — protects the bundle against
+/// image-heavy documents dumping hundreds of files.
+const MAX_IMAGES_PER_DOC: usize = 20;
+
+/// One extracted diagram: the source page it came from, and its filename
+/// under knowledge/images/.
+struct PageImage {
+    page: usize,
+    filename: String,
+}
+
+// The bundle filename slug: lowercase, dashes for spaces, path-hostile
+// punctuation stripped. Shared by document files and their image files.
+fn slug_of(stem: &str) -> String {
+    stem.to_lowercase()
+        .replace(' ', "-")
+        .replace(['.', '(', ')'], "")
+}
+
+// pdfimages -p names its output <prefix>-PPP-NNN.png (page, image index).
+// Returns the 1-based page number.
+fn pdfimages_page(filename: &str) -> Option<usize> {
+    filename.split('-').nth(1)?.parse().ok()
+}
+
+// Diagram extraction never blocks document ingestion: a failure is logged
+// and the document simply carries no images.
+fn extract_page_images(pdf: &Path, knowledge_dir: &Path, slug: &str) -> Vec<PageImage> {
+    match try_extract_page_images(pdf, knowledge_dir, slug) {
+        Ok(images) => {
+            if !images.is_empty() {
+                println!("  {} diagram(s) extracted", images.len());
+            }
+            images
+        }
+        Err(e) => {
+            eprintln!("  warning: diagram extraction failed: {e:#}");
+            Vec::new()
+        }
+    }
+}
+
+// Extracts embedded images per page via pdfimages, keeps the ones that look
+// like real diagrams (big enough, not a byte-identical duplicate of one
+// already kept — the same header graphic repeats on every page), and moves
+// them into knowledge/images/ under slug-based names.
+fn try_extract_page_images(pdf: &Path, knowledge_dir: &Path, slug: &str) -> Result<Vec<PageImage>> {
+    let images_dir = knowledge_dir.join("images");
+    fs::create_dir_all(&images_dir).context("cannot create knowledge/images directory")?;
+
+    let temp_dir = tempfile::tempdir().context("cannot create temp dir for image extraction")?;
+    let prefix = temp_dir.path().join("img");
+
+    let output = std::process::Command::new("pdfimages")
+        .args(["-png", "-p"]) // -p: page number in the output filename
+        .arg(pdf)
+        .arg(&prefix)
+        .output()
+        .context("pdfimages not found — install poppler-utils")?;
+    if !output.status.success() {
+        bail!("pdfimages failed: {}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    // Deterministic order: filenames sort by (page, image index)
+    let mut candidates: Vec<PathBuf> = fs::read_dir(temp_dir.path())?
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    candidates.sort();
+
+    let mut seen_hashes: HashSet<u64> = HashSet::new();
+    let mut per_page_counter: HashMap<usize, usize> = HashMap::new();
+    let mut images: Vec<PageImage> = Vec::new();
+
+    for candidate in candidates {
+        if images.len() >= MAX_IMAGES_PER_DOC {
+            break;
+        }
+        let Some(name) = candidate.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(page) = pdfimages_page(name) else {
+            continue;
+        };
+        if fs::metadata(&candidate)?.len() < MIN_IMAGE_BYTES {
+            continue; // logos, bullets, header graphics
+        }
+
+        // Identical bytes = the same graphic repeated on another page
+        let bytes = fs::read(&candidate)?;
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        if !seen_hashes.insert(hasher.finish()) {
+            continue;
+        }
+
+        let n = per_page_counter.entry(page).or_insert(0);
+        *n += 1;
+        let filename = format!("{slug}-p{page:03}-{n}.png");
+        fs::write(images_dir.join(&filename), &bytes)
+            .with_context(|| format!("cannot write {filename}"))?;
+        images.push(PageImage { page, filename });
+    }
+
+    Ok(images)
+}
+
+// Renders the images frontmatter list for one chunk's page range, or None
+// when no diagram falls inside it.
+fn images_field(images: &[PageImage], first_page: usize, last_page: usize) -> Option<String> {
+    let names: Vec<&str> = images
+        .iter()
+        .filter(|img| img.page >= first_page && img.page <= last_page)
+        .map(|img| img.filename.as_str())
+        .collect();
+    if names.is_empty() {
+        None
+    } else {
+        Some(format!("[{}]", names.join(", ")))
+    }
+}
+
 fn extraction_tags(used_ocr: bool) -> &'static str {
     if used_ocr {
         "[extracted, ocr, technical-note]"
@@ -236,40 +364,49 @@ fn process_document(
     let kind = ingest_kind(source_path)
         .with_context(|| format!("unsupported input type: {}", source_path.display()))?;
 
-    let (text, used_ocr) = match kind {
-        IngestKind::Pdf => extract_pdf_text(source_path, force_pdftotext)?,
+    // The slug names both the document files and its diagram files
+    let slug = slug_of(&source_path.file_stem().unwrap().to_string_lossy());
+
+    let (text, used_ocr, images) = match kind {
+        IngestKind::Pdf => {
+            let (text, used_ocr) = extract_pdf_text(source_path, force_pdftotext)?;
+            let images = extract_page_images(source_path, knowledge_dir, &slug);
+            (text, used_ocr, images)
+        }
         IngestKind::Office => {
             let temp_dir =
                 tempfile::tempdir().context("cannot create temp dir for Office conversion")?;
             let pdf = convert_office_to_pdf(source_path, &temp_dir)?;
             // LibreOffice gives us a page-shaped PDF; use pdftotext so form-feed
             // page separators survive into the existing chunking pipeline.
-            extract_pdf_text(&pdf, true)?
+            let (text, used_ocr) = extract_pdf_text(&pdf, true)?;
+            // Diagrams come from the converted PDF (while it still exists),
+            // but are named after the ORIGINAL document's slug.
+            let images = extract_page_images(&pdf, knowledge_dir, &slug);
+            (text, used_ocr, images)
         }
         IngestKind::Text => {
             let text = fs::read_to_string(source_path)
                 .with_context(|| format!("cannot read text file {}", source_path.display()))?;
-            (text, false)
+            (text, false, Vec::new())
         }
     };
 
-    write_document(source_path, text, used_ocr, knowledge_dir, written)
+    write_document(source_path, text, used_ocr, images, knowledge_dir, written)
 }
 
 fn write_document(
     source_path: &Path,
     mut text: String,
     used_ocr: bool,
+    images: Vec<PageImage>,
     knowledge_dir: &Path,
     written: &mut HashSet<PathBuf>,
 ) -> Result<()> {
     // Build the output filename: lowercase with spaces replaced by dashes
     let stem = source_path.file_stem().unwrap().to_string_lossy();
     let filename = source_path.file_name().unwrap().to_string_lossy();
-    let slug = stem
-        .to_lowercase()
-        .replace(' ', "-")
-        .replace(['.', '(', ')'], ""); // strip punctuation that would break file paths
+    let slug = slug_of(&stem);
 
     if used_ocr {
         text = include_ocr_source_title(&stem, &text);
@@ -298,7 +435,8 @@ fn write_document(
     }
 
     if chunks.len() == 1 {
-        // Fits in one chunk: single file, no parent/pages — exactly as before
+        // Fits in one chunk: single file, no parent/pages — exactly as before.
+        // All extracted diagrams belong to it, whatever page they came from.
         let okf = OkfFrontmatter {
             doc_type: "technical-note".to_string(),
             title: stem.to_string(),
@@ -306,6 +444,7 @@ fn write_document(
             resource,
             parent: None,
             pages: None,
+            images: images_field(&images, 0, usize::MAX),
             tags: tags.to_string(),
             timestamp,
         }
@@ -326,6 +465,8 @@ fn write_document(
                 resource: resource.clone(),
                 parent: Some(slug.clone()),
                 pages: Some(format!("{first_page}-{last_page}")),
+                // Only the diagrams from THIS chunk's page range
+                images: images_field(&images, *first_page, *last_page),
                 tags: tags.to_string(),
                 timestamp: timestamp.clone(),
             }
@@ -380,6 +521,30 @@ mod tests {
             super::include_ocr_source_title("EmergencyFireAlarm", "Alarm body"),
             "EmergencyFireAlarm\n\nAlarm body"
         );
+    }
+
+    #[test]
+    fn pdfimages_page_parses_page_number_from_filename() {
+        assert_eq!(super::pdfimages_page("img-001-000.png"), Some(1));
+        assert_eq!(super::pdfimages_page("img-014-002.png"), Some(14));
+        assert_eq!(super::pdfimages_page("unrelated.png"), None);
+    }
+
+    #[test]
+    fn images_field_filters_by_chunk_page_range() {
+        let images = vec![
+            super::PageImage { page: 2, filename: "doc-p002-1.png".into() },
+            super::PageImage { page: 9, filename: "doc-p009-1.png".into() },
+        ];
+        assert_eq!(
+            super::images_field(&images, 1, 6),
+            Some("[doc-p002-1.png]".to_string())
+        );
+        assert_eq!(
+            super::images_field(&images, 0, usize::MAX),
+            Some("[doc-p002-1.png, doc-p009-1.png]".to_string())
+        );
+        assert_eq!(super::images_field(&images, 3, 6), None);
     }
 
     #[test]

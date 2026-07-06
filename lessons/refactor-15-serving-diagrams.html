@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 15: Serving Diagrams — Binary Resources over MCP</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 15</div>
+    <h1>Serving Diagrams — Binary Resources over MCP</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 9b</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>Why text alone wasn't enough</h2>
+
+  <p>
+    KUKA documentation is full of diagrams — building maps, clearance drawings,
+    wiring figures — that carry information no text excerpt can. Modern AI models
+    are multimodal: hand one an image and it can read it, describe it, and answer
+    questions about it. The missing piece was plumbing: getting a PNG from inside
+    a PDF, through the bundle, over MCP, and into the agent's context. Three
+    stages, mirroring the text pipeline exactly.
+  </p>
+
+  <h2>Stage 1: extraction — deciding what counts as a diagram</h2>
+
+  <p>
+    <code>pdfimages -png -p</code> dumps every embedded image with its page number
+    in the filename. "Every embedded image" includes the KUKA logo on all 24 page
+    headers — so, like the text cleaner in
+    <a href="refactor-12-repetition-is-not-identity.html">Appendix 12</a>,
+    the interesting work is <em>filtering</em>:
+  </p>
+
+  <pre><code>const MIN_IMAGE_BYTES: u64 = 10 * 1024;   // logos are ~2–5 KB; diagrams are bigger
+const MAX_IMAGES_PER_DOC: usize = 20;     // bound the bundle's growth
+
+// Identical bytes = the same graphic repeated on another page
+let mut hasher = DefaultHasher::new();
+bytes.hash(&mut hasher);
+if !seen_hashes.insert(hasher.finish()) { continue; }</code></pre>
+
+  <p>
+    Three cheap heuristics — size floor, byte-hash dedupe, per-document cap — and
+    the corpus yields 50 genuine diagrams instead of hundreds of header logos.
+    The Java equivalent of the dedupe is a <code>HashSet&lt;String&gt;</code> of
+    <code>MessageDigest</code> hashes; Rust's <code>DefaultHasher</code> is the
+    std-library, no-dependency version (not cryptographic — fine for dedupe).
+    Failure policy matches the OCR lesson: diagram extraction failing never blocks
+    document ingestion — it logs a warning and the document ships without images.
+  </p>
+
+  <h2>Stage 2: association — pages are the join key</h2>
+
+  <p>
+    Each image knows its page (<code>img-014-002.png</code> → page 14); each chunk
+    knows its page range. The join is a filter, recorded in frontmatter the same
+    way as every other document property:
+  </p>
+
+  <pre><code>images: [building-map-and-extension-map-p002-1.png, ...]   // only THIS chunk's pages</code></pre>
+
+  <p>
+    From there the field rides the existing rails: <code>Document</code> parses it,
+    <code>DocMeta</code> carries it, <code>SearchHit</code> exposes it — the same
+    field-threading pattern as every attribute added since
+    <a href="refactor-03-document-type.html">Appendix 3</a>.
+  </p>
+
+  <h2>Stage 3: serving — base64 blobs and in-band advertising</h2>
+
+  <p>
+    MCP resources carry text <em>or</em> binary. Binary travels as base64 inside
+    JSON — the same trick as embedding images in data URLs or SOAP attachments:
+  </p>
+
+  <p><strong>Rust:</strong></p>
+  <pre><code>use base64::Engine as _;   // trait must be in scope for .encode()
+
+let bytes = std::fs::read(&amp;path)?;
+let blob = base64::engine::general_purpose::STANDARD.encode(&amp;bytes);
+let contents = ResourceContents::blob(blob, uri.clone()).with_mime_type("image/png");</code></pre>
+
+  <p><strong>Java equivalent:</strong></p>
+  <pre><code>byte[] bytes = Files.readAllBytes(path);
+String blob = Base64.getEncoder().encodeToString(bytes);   // static, always available</code></pre>
+
+  <p>
+    The Rust wrinkle: <code>encode</code> lives on the <code>Engine</code>
+    <em>trait</em>, so the trait must be imported (<code>as _</code> imports it
+    anonymously — we need its methods, not its name). Java's
+    <code>Base64.getEncoder()</code> is a static factory; Rust makes the engine
+    choice (standard vs URL-safe alphabet) an explicit value.
+  </p>
+
+  <p>
+    Discovery follows the step-6 doctrine — <em>tool output is the steering
+    channel that reaches every harness</em>. Hits now advertise their diagrams
+    in-band, next to the text they illustrate:
+  </p>
+
+  <pre><code>• EmergencyFireAlarm (pages 1-6)
+  Resource: kuka://docs/emergencyfirealarm-p001-006
+  Diagrams: kuka://images/emergencyfirealarm-p002-1.png, kuka://images/...</code></pre>
+
+  <p>
+    The traversal guard from <a href="refactor-04-errors-that-lie.html">Appendix 4</a>
+    guards the new URI space too — same function, second caller.
+  </p>
+
+  <h2>The payoff, end to end</h2>
+
+  <p>
+    The scanned fire-alarm document — invisible until step 8's OCR — now returns
+    text excerpts <em>plus</em> eight slide images. An agent asked "what does the
+    fire alarm procedure look like?" searches, sees the Diagrams line, reads
+    <code>kuka://images/emergencyfirealarm-p002-1.png</code>, and receives the
+    actual slide (<code>"blob":"iVBORw0KGgo…"</code> — PNG magic bytes, base64'd)
+    to look at. Text search finds the place; images show what words can't.
+  </p>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Java</th><th>Rust</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>Base64.getEncoder().encodeToString(bytes)</code></td>
+        <td><code>STANDARD.encode(&amp;bytes)</code> (needs <code>use base64::Engine as _</code>)</td>
+      </tr>
+      <tr>
+        <td><code>MessageDigest</code> hash for dedupe</td>
+        <td><code>DefaultHasher</code> — std, non-cryptographic, fine for dedupe</td>
+      </tr>
+      <tr>
+        <td>import for static methods</td>
+        <td>trait import <code>as _</code> — methods without the name</td>
+      </tr>
+      <tr>
+        <td>builder <code>.contentType("image/png")</code></td>
+        <td>consuming builder <code>.with_mime_type("image/png")</code></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "Why does base64 inflate size by ~33% and when does that matter for context windows?",
+    "What does `use Trait as _` do exactly?",
+    or "How would vision-model captioning make these diagrams searchable, not just retrievable?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-14-office-ingestion.html">← Refactor Appendix 14: Office Ingestion</a>
+    <a href="refactor-13-ocr-fallback.html">← Related: Appendix 13, OCR Fallback</a>
+  </nav>
+
+</div>
+</body>
+</html>

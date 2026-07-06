@@ -20,6 +20,9 @@ pub struct OkfFrontmatter {
     pub parent: Option<String>,
     /// For chunked documents: the source page range, e.g. "12-18".
     pub pages: Option<String>,
+    /// For documents with extracted diagrams: bare image filenames living
+    /// under knowledge/images/, e.g. "[slug-p003-1.png, slug-p005-1.png]".
+    pub images: Option<String>,
     /// Rendered verbatim, e.g. "[extracted, technical-note]"
     pub tags: String,
     pub timestamp: String,
@@ -40,6 +43,9 @@ impl OkfFrontmatter {
         }
         if let Some(pages) = &self.pages {
             out.push_str(&format!("pages: {pages}\n"));
+        }
+        if let Some(images) = &self.images {
+            out.push_str(&format!("images: {images}\n"));
         }
         out.push_str(&format!("tags: {}\n", self.tags));
         out.push_str(&format!("timestamp: {}\n", self.timestamp));
@@ -105,6 +111,7 @@ mod tests {
             resource: "kuka-docs/test.pdf".to_string(),
             parent: None,
             pages: None,
+            images: None,
             tags: "[extracted, technical-note]".to_string(),
             timestamp: "2026-01-01T00:00:00Z".to_string(),
         };
@@ -137,6 +144,7 @@ mod tests {
             resource: "kuka-docs/fleet.pdf".to_string(),
             parent: Some("fleet-manual".to_string()),
             pages: Some("12-18".to_string()),
+            images: Some("[fleet-manual-p013-1.png, fleet-manual-p015-1.png]".to_string()),
             tags: "[extracted]".to_string(),
             timestamp: "2026-01-01T00:00:00Z".to_string(),
         };
@@ -147,5 +155,9 @@ mod tests {
             Some("fleet-manual".to_string())
         );
         assert_eq!(extract_frontmatter_field(&doc, "pages"), Some("12-18".to_string()));
+        assert_eq!(
+            extract_frontmatter_field(&doc, "images"),
+            Some("[fleet-manual-p013-1.png, fleet-manual-p015-1.png]".to_string())
+        );
     }
 }

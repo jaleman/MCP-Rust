@@ -26,6 +26,9 @@ pub struct Document {
     pub content: String,
     /// Byte offset where the body starts — just past the closing "---" line.
     pub body_start: usize,
+    /// Diagram filenames under knowledge/images/ belonging to this document
+    /// (from the optional `images:` frontmatter list). Empty when absent.
+    pub images: Vec<String>,
 }
 
 impl Document {
@@ -49,6 +52,19 @@ impl Document {
         let resource = extract_frontmatter_field(&content, "resource").unwrap_or_default();
         let description = extract_frontmatter_field(&content, "description");
 
+        // "images: [a.png, b.png]" → vec of bare filenames; absent → empty
+        let images: Vec<String> = extract_frontmatter_field(&content, "images")
+            .map(|list| {
+                list.trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // Find where the body starts — after the closing "---" of the frontmatter.
         // Computed once here so no consumer ever anchors excerpts inside frontmatter.
         let body_start = content.find("\n---\n").map(|p| p + 5).unwrap_or(0);
@@ -62,6 +78,7 @@ impl Document {
             description,
             content,
             body_start,
+            images,
         })
     }
 

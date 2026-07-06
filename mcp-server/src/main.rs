@@ -155,16 +155,21 @@ fn run_search(index: &Index, query: &str) -> CallToolResult {
     CallToolResult::success(vec![Content::text(text)])
 }
 
-// Renders one hit as the bullet-point block shown to the client. The pointer
-// shown is the kuka:// resource URI — an action the agent can take (read the
-// full section) — never a source-file path it might be tempted to open.
+// Renders one hit as the bullet-point block shown to the client. The pointers
+// shown are kuka:// resource URIs — actions the agent can take (read the full
+// section, view a diagram) — never source-file paths it might try to open.
 fn format_hit(hit: &SearchHit) -> String {
-    format!(
-        "• {}\n  Resource: kuka://docs/{}\n\n  ...{}...",
-        hit.title,
-        hit.stem,
-        hit.excerpts.join("\n\n  ...")
-    )
+    let mut out = format!("• {}\n  Resource: kuka://docs/{}", hit.title, hit.stem);
+    if !hit.images.is_empty() {
+        let uris: Vec<String> = hit
+            .images
+            .iter()
+            .map(|image| format!("kuka://images/{image}"))
+            .collect();
+        out.push_str(&format!("\n  Diagrams: {}", uris.join(", ")));
+    }
+    out.push_str(&format!("\n\n  ...{}...", hit.excerpts.join("\n\n  ...")));
+    out
 }
 
 // Renders the document listing from index metadata — no disk access at all.
@@ -223,7 +228,9 @@ impl ServerHandler for KukaServer {
              (1) call search_docs first; (2) if the excerpts do not fully \
              answer, retry search_docs with different terms, or read the \
              kuka://docs/{name} resource shown in the hit to get the full \
-             section (sections are small — always safe to read whole). Do \
+             section (sections are small — always safe to read whole). Hits \
+             may also list Diagrams: kuka://images/{name} resources — read \
+             one to view the diagram referenced by that text. Do \
              not browse the resource list to hunt for answers, and never \
              fall back to reading source documents outside these tools. \
              list_docs shows every document grouped by type. After \
@@ -239,10 +246,8 @@ impl ServerHandler for KukaServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, McpError> {
         // Straight from index metadata — no disk access.
-        let resources: Vec<Resource> = self
-            .index
-            .read()
-            .unwrap()
+        let index = self.index.read().unwrap();
+        let mut resources: Vec<Resource> = index
             .docs()
             .iter()
             .map(|doc| {
@@ -257,6 +262,17 @@ impl ServerHandler for KukaServer {
             })
             .collect();
 
+        // Diagrams extracted from the documents, served as image resources
+        for doc in index.docs() {
+            for image in &doc.images {
+                let uri = format!("kuka://images/{image}");
+                let raw = RawResource::new(uri, image.clone())
+                    .with_title(format!("Diagram from {}", doc.title))
+                    .with_mime_type("image/png".to_string());
+                resources.push(Annotated::new(raw, None));
+            }
+        }
+
         Ok(ListResourcesResult::with_all_items(resources))
     }
 
@@ -266,6 +282,31 @@ impl ServerHandler for KukaServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         let uri = &request.uri;
+
+        // Diagram resources: PNG bytes served base64-encoded as an MCP blob.
+        // Multimodal clients render/interpret these directly.
+        if let Some(image_name) = uri.strip_prefix("kuka://images/") {
+            // Same traversal guard as documents — plain filenames only
+            if !resource_stem_is_safe(image_name) {
+                return Err(McpError {
+                    code: ErrorCode::RESOURCE_NOT_FOUND,
+                    message: format!("Invalid resource URI: {uri}").into(),
+                    data: None,
+                });
+            }
+            let path = self.knowledge_dir.join("images").join(image_name);
+            let bytes = std::fs::read(&path).map_err(|_| McpError {
+                code: ErrorCode::RESOURCE_NOT_FOUND,
+                message: format!("Resource not found: {uri}").into(),
+                data: None,
+            })?;
+
+            use base64::Engine as _;
+            let blob = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            let contents =
+                ResourceContents::blob(blob, uri.clone()).with_mime_type("image/png");
+            return Ok(ReadResourceResult::new(vec![contents]));
+        }
 
         // Strip the kuka://docs/ prefix to recover the file stem
         let stem = uri.strip_prefix("kuka://docs/").ok_or_else(|| McpError {

@@ -42,6 +42,8 @@ pub struct DocMeta {
     pub resource: String,
     pub description: Option<String>,
     pub body_start: usize,
+    /// Diagram filenames under knowledge/images/ for this document.
+    pub images: Vec<String>,
     /// Tokens in the body — the denominator for length-normalised scoring.
     token_count: usize,
 }
@@ -109,6 +111,7 @@ impl Index {
                 resource: doc.resource,
                 description: doc.description,
                 body_start: doc.body_start,
+                images: doc.images,
                 token_count,
             });
             // doc.content is dropped here — bodies never stay in memory
@@ -233,6 +236,7 @@ impl Index {
             hits.push(SearchHit {
                 title: meta.title.clone(),
                 stem: meta.stem.clone(),
+                images: meta.images.clone(),
                 // Frequency normalised by document length (×1000 to stay
                 // integral): a focused 2-page note now outranks a long manual
                 // with the same number of scattered mentions.

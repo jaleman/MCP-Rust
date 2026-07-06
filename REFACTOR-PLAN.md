@@ -58,7 +58,7 @@ cargo is not installed on the Windows host.
 | 7 | zone-based boilerplate detection (data-loss fix) | complete | PR #10 merged (b15f39e); lesson refactor-12 |
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
-| 9b | diagram/image extraction + serving as MCP resources | not started | assigned to CLAUDE; unblocked (9a merged) — awaiting user approval to start |
+| 9b | diagram/image extraction + serving as MCP resources | in progress | implemented + lesson refactor-15; PR open, awaiting user merge |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -641,3 +641,23 @@ Newest entry last. Every status change in the dashboard gets a line here.
   "building map and extension map.docx" (33 pages) → 2 chunks with
   correct provenance; live query returns it with page range + resource
   URI. Next: 9b (diagrams) — Claude, awaiting user approval.
+- 2026-07-06 — STEP 9B implemented on branch refactor/step-9b-diagrams
+  (user approved; Claude implementing per §9 split). extract.rs:
+  try_extract_page_images via pdfimages -png -p (size floor 10 KB drops
+  logos/header graphics, byte-hash dedupe via DefaultHasher for
+  graphics repeated across pages, cap 20/doc), images written to
+  knowledge/images/<slug>-pNNN-n.png, named after the ORIGINAL doc for
+  Office sources; failure logs a warning and never blocks ingestion.
+  OkfFrontmatter gains optional images: list; Document/DocMeta/
+  SearchHit thread it through. main.rs: hits gain "Diagrams:
+  kuka://images/..." lines; list_resources includes image resources
+  (image/png); read_resource serves base64 blobs via
+  ResourceContents::blob + with_mime_type (base64 crate added);
+  traversal guard reused; instructions updated. 53/53 tests, clippy
+  clean, debug binary rebuilt. Full re-extraction: 11/11 docs, 50
+  diagrams kept across 6 docs. Live verify: fire-alarm hit advertises
+  8 diagram URIs; resources/read returns mimeType image/png with PNG
+  magic bytes in base64; traversal attempts rejected. Docs updated
+  (USER-MANUAL capabilities/extraction/results sections), lesson
+  refactor-15-serving-diagrams written. PR opened; step complete when
+  user merges.

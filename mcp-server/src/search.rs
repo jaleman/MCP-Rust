@@ -50,6 +50,10 @@ pub struct SearchHit {
     /// paths deliberately do not appear in hits: agents can't open them, and
     /// showing them invites falling back to raw files instead of the tools.
     pub stem: String,
+    /// Diagram filenames (under knowledge/images/) belonging to the matched
+    /// document — the presentation layer renders them as kuka://images/{name}
+    /// resource URIs so multimodal agents can view them alongside the text.
+    pub images: Vec<String>,
     /// Term frequency normalised by document length, scaled ×1000 so it
     /// stays an integer. Longer documents no longer win just by being long.
     pub score: usize,
