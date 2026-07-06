@@ -55,7 +55,7 @@ cargo is not installed on the Windows host.
 | 5b | inverted index, seek excerpts, reload_docs | complete | PR #6 merged (4732155); lessons refactor-09, refactor-10 |
 | 5c | tantivy/hybrid escape hatch | deferred | trigger conditions in §5c |
 | 6 | clean extraction + agent steering (post-plan) | complete | PR #9 merged (e601cb3, after the #8 stacked-merge mishap); lesson refactor-11 |
-| 7 | zone-based boilerplate detection (data-loss fix) | in progress | PR #10 open, awaiting user merge |
+| 7 | zone-based boilerplate detection (data-loss fix) | complete | PR #10 merged (b15f39e); lesson refactor-12 |
 | 8 | OCR ingestion for image-based PDFs | not started | NEXT STEP (user request 2026-07-05) — see §8 |
 
 ## Resuming mid-step (handoff protocol)
@@ -523,3 +523,12 @@ Newest entry last. Every status change in the dashboard gets a line here.
   refactor-12-repetition-is-not-identity. NOTE: a mid-command container
   restart produced one exit-137; harmless, container came back up.
   PR opened against master; step complete when user merges.
+- 2026-07-05 — STEP 7 COMPLETE. User merged PR #10 (b15f39e). Note:
+  the step-8 plan commit 031bfd4 was pushed to the PR branch after the
+  merge snapshot and had to be cherry-picked onto master afterwards
+  (d42d8b3) — lesson: don't push to a PR branch once the user may have
+  merged; verify master after every merge. STEP 8 (OCR ingestion, §8)
+  is designed and handed to a Codex agent for implementation on branch
+  refactor/step-8-ocr-ingestion; house rules apply (PR to master, user
+  merges, docs + lesson refactor-13 in same commit, devcontainer-only
+  cargo, rebuild debug binary).
