@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Refactor Appendix 13: OCR Fallback for Image-Based PDFs</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="container">
+
+  <header class="lesson-header">
+    <div class="lesson-number">Refactor Appendix 13</div>
+    <h1>OCR Fallback for Image-Based PDFs</h1>
+    <div class="lesson-meta">
+      <span>Refactor step 8 — making scans searchable without changing search</span>
+      <span>KUKA MCP Server in Rust</span>
+    </div>
+  </header>
+
+  <h2>The missing document</h2>
+
+  <p>
+    <code>EmergencyFireAlarm.pdf</code> looked like a normal source document, but
+    it never reached the knowledge bundle. Both text extractors returned an
+    empty string, and <code>extract</code> correctly refused to write a
+    frontmatter-only markdown file. The problem was not search, indexing, or
+    chunking. The PDF pages were images, so there was no text layer to extract.
+  </p>
+
+  <p>
+    Step 7 taught the opposite lesson — do not assume missing data needs OCR until
+    you check the pipeline. Here the pipeline check really did point to OCR: raw
+    extraction was empty before cleaning ever ran. That placement matters. OCR is
+    a fallback for <em>missing raw text</em>, not a repair pass for documents that
+    already extracted text.
+  </p>
+
+  <h2>Why ocrmypdf instead of calling Tesseract directly?</h2>
+
+  <p>
+    Tesseract can OCR page images, but that would make Rust responsible for
+    rendering PDF pages, naming temporary images, joining text back together, and
+    reconstructing page boundaries. <code>ocrmypdf</code> does the PDF-shaped job:
+    it creates a searchable PDF with the original pages preserved. Then our
+    existing <code>pdftotext -layout</code> path extracts text with form-feed page
+    separators, so page-accurate chunking and <code>pages:</code> provenance keep
+    working unchanged.
+  </p>
+
+  <div class="diagram">
+    normal PDF → pdf-extract / pdftotext → clean → chunk → OKF markdown<br>
+    image PDF&nbsp;&nbsp; → empty raw text → ocrmypdf → pdftotext → clean → chunk → OKF markdown
+  </div>
+
+  <h2>The Rust change</h2>
+
+  <pre><code>fn try_ocr(pdf_path: &amp;Path) -&gt; Result&lt;String&gt; {
+    let temp = tempfile::Builder::new()
+        .suffix(".pdf")
+        .tempfile()
+        .context("cannot create temp file for OCR output")?;
+
+    let output = std::process::Command::new("ocrmypdf")
+        .arg("--skip-text")
+        .arg(pdf_path)
+        .arg(temp.path())
+        .output()
+        .context("ocrmypdf not found — install ocrmypdf (apt-get install ocrmypdf)")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&amp;output.stderr);
+        bail!("ocrmypdf failed: {stderr}");
+    }
+
+    try_pdftotext(temp.path())
+}</code></pre>
+
+  <p>
+    The temporary file is ordinary Rust RAII: when <code>temp</code> drops, the
+    OCR output PDF is deleted. There is no cleanup branch to remember and no
+    stale file path for later runs to trip over. The function returns text, not a
+    special OCR document type, because after OCR the rest of the extractor should
+    not care how the text layer was created.
+  </p>
+
+  <pre><code>let mut text = if force_pdftotext {
+    try_pdftotext(pdf_path)?
+} else {
+    let extracted = pdf_extract::extract_text(pdf_path)?;
+    if extracted.trim().is_empty() {
+        println!("  pdf-extract returned empty text — trying pdftotext…");
+        try_pdftotext(pdf_path)?
+    } else {
+        extracted
+    }
+};
+
+let used_ocr = if text.trim().is_empty() {
+    println!("  no text layer — running OCR…");
+    text = try_ocr(pdf_path)?;
+    true
+} else {
+    false
+};</code></pre>
+
+  <p>
+    That one <code>trim().is_empty()</code> check is the design boundary. OCR runs
+    only after the normal path has failed to produce raw text. It runs before
+    <code>clean_extracted_text</code>, so a document is not OCR'd just because the
+    cleaner strips navigation noise or because chunking later decides the body is
+    empty.
+  </p>
+
+  <p>
+    OCR-derived body text is also prefixed with the source title before cleaning
+    and chunking. That is not for display; the frontmatter already has a title.
+    It makes filename-visible concepts searchable when the scanned pages never
+    spell them out cleanly. In the real acceptance check, <em>Fire</em> appears in
+    <code>EmergencyFireAlarm.pdf</code>, while the OCR text mostly says
+    <em>Emergency</em> and <em>Alarm</em>.
+  </p>
+
+  <h2>Java equivalent</h2>
+
+  <pre><code>// Java sketch: same shell-out idea, more manual lifecycle management.
+Path temp = Files.createTempFile("ocr-output", ".pdf");
+try {
+    Process process = new ProcessBuilder(
+            "ocrmypdf", "--skip-text", pdfPath.toString(), temp.toString())
+        .redirectErrorStream(false)
+        .start();
+
+    int code = process.waitFor();
+    if (code != 0) {
+        String stderr = new String(process.getErrorStream().readAllBytes(), UTF_8);
+        throw new IOException("ocrmypdf failed: " + stderr);
+    }
+
+    return runPdfToText(temp);
+} finally {
+    Files.deleteIfExists(temp);
+}</code></pre>
+
+  <p>
+    Rust's <code>Command</code> and Java's <code>ProcessBuilder</code> are close
+    cousins: both build a child process command without invoking a shell, both
+    capture stdout/stderr, and both force you to check the exit status. The
+    difference you feel as a Java developer is ownership. <code>NamedTempFile</code>
+    owns the file and deletes it on drop; Java usually uses a
+    <code>try/finally</code> block or <code>deleteOnExit</code>, and the latter can
+    accumulate files in a long-running process.
+  </p>
+
+  <h2>Keeping OCR auditable</h2>
+
+  <pre><code>fn extraction_tags(used_ocr: bool) -&gt; &amp;'static str {
+    if used_ocr {
+        "[extracted, ocr, technical-note]"
+    } else {
+        "[extracted, technical-note]"
+    }
+}</code></pre>
+
+  <p>
+    OCR text can contain recognition errors. The search engine's fuzzy matching
+    helps with one- or two-character mistakes, but the bundle should still say
+    where the text came from. The <code>ocr</code> tag is small, visible in
+    frontmatter, and travels with both single-file and chunked outputs.
+  </p>
+
+  <h2>Side-by-side summary</h2>
+
+  <table class="comparison-table">
+    <thead><tr><th>Concern</th><th>Java world</th><th>This Rust server</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>run an external tool</td>
+        <td><code>new ProcessBuilder(...).start()</code></td>
+        <td><code>std::process::Command::new(...).output()</code></td>
+      </tr>
+      <tr>
+        <td>temporary OCR PDF</td>
+        <td><code>Files.createTempFile</code> plus <code>finally</code> cleanup</td>
+        <td><code>tempfile::Builder</code>; delete on drop</td>
+      </tr>
+      <tr>
+        <td>error context</td>
+        <td>wrap or rethrow with message</td>
+        <td><code>anyhow::Context</code> adds install guidance</td>
+      </tr>
+      <tr>
+        <td>fallback boundary</td>
+        <td><code>if (text.trim().isEmpty())</code></td>
+        <td>same check, before cleaning and chunking</td>
+      </tr>
+      <tr>
+        <td>provenance</td>
+        <td>metadata flag or enum</td>
+        <td><code>tags: [extracted, ocr, technical-note]</code></td>
+      </tr>
+      <tr>
+        <td>title-only query terms</td>
+        <td>index a title field or prepend a hidden heading</td>
+        <td>OCR body starts with the source title before chunking</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="ask-teacher">
+    <strong>Questions?</strong> Ask Claude directly. Good questions:
+    "Why does Command avoid shell quoting problems?",
+    "When would delete-on-drop be dangerous for temporary files?",
+    or "How would you add a --no-ocr flag without changing process_pdf too much?"
+  </div>
+
+  <nav class="lesson-nav">
+    <a href="refactor-12-repetition-is-not-identity.html">← Refactor Appendix 12: Repetition Is Not Identity</a>
+    <a href="refactor-11-clean-extraction-and-agent-steering.html">← Related: Appendix 11, Clean Extraction and Agent Steering</a>
+  </nav>
+
+</div>
+</body>
+</html>

@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use mcp_server::chunk::{Chunk, chunk_pages, clean_extracted_text};
+use mcp_server::chunk::{chunk_pages, clean_extracted_text, Chunk};
 use mcp_server::frontmatter::OkfFrontmatter; // shared OKF format — same module the server parses with
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -112,6 +112,42 @@ fn try_pdftotext(pdf_path: &Path) -> Result<String> {
     String::from_utf8(output.stdout).context("pdftotext output is not valid UTF-8")
 }
 
+// Runs OCR on an image-based PDF via ocrmypdf, then extracts the text layer
+// it produced. --skip-text leaves pages that already have text untouched,
+// which is safe for mixed documents.
+fn try_ocr(pdf_path: &Path) -> Result<String> {
+    let temp = tempfile::Builder::new()
+        .suffix(".pdf")
+        .tempfile()
+        .context("cannot create temp file for OCR output")?;
+
+    let output = std::process::Command::new("ocrmypdf")
+        .arg("--skip-text")
+        .arg(pdf_path)
+        .arg(temp.path())
+        .output()
+        .context("ocrmypdf not found — install ocrmypdf (apt-get install ocrmypdf)")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("ocrmypdf failed: {stderr}");
+    }
+
+    try_pdftotext(temp.path())
+}
+
+fn extraction_tags(used_ocr: bool) -> &'static str {
+    if used_ocr {
+        "[extracted, ocr, technical-note]"
+    } else {
+        "[extracted, technical-note]"
+    }
+}
+
+fn include_ocr_source_title(stem: &str, text: &str) -> String {
+    format!("{stem}\n\n{text}")
+}
+
 // Extracts text from a single PDF and writes it as one or more OKF markdown
 // files. Documents that fit in one chunk (~8 KB) produce a single file exactly
 // as before; larger documents produce one file per chunk with parent/pages
@@ -128,7 +164,7 @@ fn process_pdf(
     // Note: only pdftotext emits form-feed page separators, so page-accurate
     // chunking needs --force-pdftotext; pdf-extract output falls back to
     // paragraph-based splitting for oversized documents.
-    let text = if force_pdftotext {
+    let mut text = if force_pdftotext {
         try_pdftotext(pdf_path)?
     } else {
         let extracted = pdf_extract::extract_text(pdf_path)?;
@@ -141,6 +177,14 @@ fn process_pdf(
         }
     };
 
+    let used_ocr = if text.trim().is_empty() {
+        println!("  no text layer — running OCR…");
+        text = try_ocr(pdf_path)?;
+        true
+    } else {
+        false
+    };
+
     // Build the output filename: lowercase with spaces replaced by dashes
     let stem = pdf_path.file_stem().unwrap().to_string_lossy();
     let filename = pdf_path.file_name().unwrap().to_string_lossy();
@@ -149,9 +193,14 @@ fn process_pdf(
         .replace(' ', "-")
         .replace(['.', '(', ')'], ""); // strip punctuation that would break file paths
 
+    if used_ocr {
+        text = include_ocr_source_title(&stem, &text);
+    }
+
     let resource = format!("kuka-docs/{filename}");
     // Real extraction time — files used to carry a hardcoded date
     let timestamp = jiff::Timestamp::now().to_string();
+    let tags = extraction_tags(used_ocr);
 
     // Strip repeated headers/footers and TOC dot-leader lines BEFORE chunking
     // so the bundle files themselves are clean — excerpts, resources, and any
@@ -163,7 +212,11 @@ fn process_pdf(
     // Both extractors produced nothing — refuse to write a frontmatter-only
     // file (an empty body used to slip through and pollute the bundle).
     if chunks.is_empty() {
-        bail!("no text could be extracted (image-only or empty PDF?)");
+        if used_ocr {
+            bail!("no text could be extracted, even after OCR");
+        } else {
+            bail!("no text could be extracted (image-only or empty PDF?)");
+        }
     }
 
     if chunks.len() == 1 {
@@ -175,7 +228,7 @@ fn process_pdf(
             resource,
             parent: None,
             pages: None,
-            tags: "[extracted, technical-note]".to_string(),
+            tags: tags.to_string(),
             timestamp,
         }
         .render(&chunks[0].text);
@@ -183,7 +236,11 @@ fn process_pdf(
     } else {
         println!("  {} chunk(s):", chunks.len());
         for chunk in &chunks {
-            let Chunk { text, first_page, last_page } = chunk;
+            let Chunk {
+                text,
+                first_page,
+                last_page,
+            } = chunk;
             let okf = OkfFrontmatter {
                 doc_type: "technical-note".to_string(),
                 title: format!("{stem} (pages {first_page}-{last_page})"),
@@ -191,7 +248,7 @@ fn process_pdf(
                 resource: resource.clone(),
                 parent: Some(slug.clone()),
                 pages: Some(format!("{first_page}-{last_page}")),
-                tags: "[extracted, technical-note]".to_string(),
+                tags: tags.to_string(),
                 timestamp: timestamp.clone(),
             }
             .render(text);
@@ -225,4 +282,23 @@ fn write_output(path: &Path, content: &str, written: &mut HashSet<PathBuf>) -> R
     std::fs::write(path, content)?;
     println!("  → {}", path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extraction_tags;
+
+    #[test]
+    fn extraction_tags_include_ocr_only_when_ocr_was_used() {
+        assert_eq!(extraction_tags(false), "[extracted, technical-note]");
+        assert_eq!(extraction_tags(true), "[extracted, ocr, technical-note]");
+    }
+
+    #[test]
+    fn include_ocr_source_title_prepends_title_to_body_text() {
+        assert_eq!(
+            super::include_ocr_source_title("EmergencyFireAlarm", "Alarm body"),
+            "EmergencyFireAlarm\n\nAlarm body"
+        );
+    }
 }

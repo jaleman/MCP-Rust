@@ -19,7 +19,7 @@ strsim = "0.11.1"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+tempfile = "3.27.0"
 
 # Only compiled for `cargo test` — like Maven's <scope>test</scope>
 [dev-dependencies]
-tempfile = "3.27.0"
