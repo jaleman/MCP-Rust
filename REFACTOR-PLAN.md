@@ -59,6 +59,7 @@ cargo is not installed on the Windows host.
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
 | 9b | diagram/image extraction + serving as MCP resources | in progress | implemented + lesson refactor-15; PR open, awaiting user merge |
+| 10 | streamable-HTTP transport (browser/remote clients) | not started | design ready: designs/step-10-streamable-http-transport.md — assigned to Codex; start only after PR #13 merged + user approval |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -661,3 +662,14 @@ Newest entry last. Every status change in the dashboard gets a line here.
   (USER-MANUAL capabilities/extraction/results sections), lesson
   refactor-15-serving-diagrams written. PR opened; step complete when
   user merges.
+- 2026-07-06 — STEP 10 DESIGNED (not started). Codex-ready design doc at
+  designs/step-10-streamable-http-transport.md: optional --http flag
+  (stdio stays the no-flag default), rmcp transport-streamable-http-server
+  feature + axum mount at /mcp, one shared Arc<RwLock<Index>> across all
+  sessions, loopback-only binding with no auth (claude.ai/public HTTPS +
+  OAuth explicitly out of scope; tunnel for testing), curl-level
+  acceptance sequence included, devcontainer port forward 8382, lesson
+  refactor-16. Committed on the open 9b branch (rides PR #13). NEXT
+  SESSION (possibly Opus): after PR #13 merges, close out 9b (dashboard
+  flip + branch cleanup), then hand the design doc to Codex for step 10
+  with user approval per protocol.
