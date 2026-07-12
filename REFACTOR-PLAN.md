@@ -60,7 +60,7 @@ cargo is not installed on the Windows host.
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
-| 11 | soft-AND / coverage-ranked matching in search_docs | in progress | implemented locally 2026-07-12; verification/PR still needed |
+| 11 | soft-AND / coverage-ranked matching in search_docs | complete | PR #17 merged (af04c60); implemented by Codex, reviewed + verified by Claude; lesson refactor-18 |
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
 | 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | not started | designed 2026-07-12; see §13 |
 | 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | not started | designed 2026-07-12; see §14 |
@@ -1036,3 +1036,12 @@ Newest entry last. Every status change in the dashboard gets a line here.
   action: user reviews/merges; then verify content lands on master (not
   just the merge label), flip dashboard to complete, clean up branch.
   Steps 13 and 14 remain not started.
+- 2026-07-12 — STEP 11 COMPLETE (verified on master, not just the label).
+  User merged PR #17 (merge commit af04c60). Confirmed on master itself:
+  coverage-ranked search present in index.rs (grep), cargo clippy
+  --all-targets clean, cargo test 59/59, debug binary rebuilt — all
+  re-run fresh against merged master in the devcontainer. Branch
+  refactor/step-11-soft-and-ranking deleted local + remote. Search-fix
+  arc from the two trace analyses is now 2 of 4 done (11 soft-AND, 12
+  result bounds); steps 13 (chunk continuity) and 14 (word-boundary
+  short-term matching) remain, 13 being designed for Codex handoff next.
