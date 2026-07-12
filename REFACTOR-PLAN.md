@@ -58,8 +58,8 @@ cargo is not installed on the Windows host.
 | 7 | zone-based boilerplate detection (data-loss fix) | complete | PR #10 merged (b15f39e); lesson refactor-12 |
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
-| 9b | diagram/image extraction + serving as MCP resources | in progress | implemented + lesson refactor-15; PR open, awaiting user merge |
-| 10 | streamable-HTTP transport (browser/remote clients) | not started | design ready: designs/step-10-streamable-http-transport.md — assigned to Codex; start only after PR #13 merged + user approval |
+| 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
+| 10 | streamable-HTTP transport (browser/remote clients) | not started | design ready: designs/step-10-streamable-http-transport.md — assigned to Codex; awaiting user approval to start |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -683,3 +683,15 @@ Newest entry last. Every status change in the dashboard gets a line here.
 - 2026-07-06 — User raised MAX_IMAGES_PER_DOC 40→60 and re-extracted the
   building map manually: 54/54 diagrams kept, no truncation warning.
   Committed on the PR #13 branch.
+- 2026-07-06 — STEP 9B COMPLETE (verified, not just trusted the GitHub
+  label). User merged PR #13 as merge commit 995c399 directly into
+  master — no stacking this time, confirmed 3ce494f is an ancestor of
+  master and MAX_IMAGES_PER_DOC: usize = 60 is present in the actual
+  file on master. 53/53 tests still pass post-merge. Branch deleted
+  local + remote. Also discovered/fixed along the way: CLAUDE.md/
+  AGENTS.md changes only take effect in NEW sessions (loaded once at
+  startup) — a long-running session kept using the old "read but don't
+  display" behavior until the user started a fresh session, which then
+  correctly opened a diagram image per the updated instructions. Next
+  action: ask user for permission to hand designs/step-10-streamable-
+  http-transport.md to Codex for step 10.
