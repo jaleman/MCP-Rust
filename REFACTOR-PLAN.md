@@ -62,7 +62,7 @@ cargo is not installed on the Windows host.
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
 | 11 | soft-AND / coverage-ranked matching in search_docs | complete | PR #17 merged (af04c60); implemented by Codex, reviewed + verified by Claude; lesson refactor-18 |
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
-| 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | in progress | implemented + verified locally 2026-07-12; PR still needed |
+| 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | complete | PR #18 merged (4a201fd); implemented by Codex, reviewed + verified by Claude; lesson refactor-19 |
 | 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | not started | designed 2026-07-12; see §14 |
 
 ## Resuming mid-step (handoff protocol)
@@ -1092,3 +1092,13 @@ Newest entry last. Every status change in the dashboard gets a line here.
   Review comment posted on PR #18. Next action: user reviews/merges; then
   verify on master, flip dashboard, clean up branch. Step 14 (word-
   boundary short-term matching) is the last remaining search-arc step.
+- 2026-07-12 — STEP 13 COMPLETE (verified on master, not just the label).
+  User merged PR #18 (merge commit 4a201fd). Confirmed on master itself:
+  populate_next_stems/next_stem in index.rs, "Continues:" in main.rs,
+  lesson refactor-19 present (grep). cargo clippy --all-targets clean,
+  cargo test 64/64, debug binary rebuilt — re-run fresh against merged
+  master in the devcontainer. Branch refactor/step-13-chunk-continuity
+  deleted local + remote. Search-fix arc is 3 of 4 done (11 soft-AND,
+  12 result bounds, 13 chunk continuity); step 14 (word-boundary
+  short-term matching) is the last remaining, designed in §14, awaiting
+  its handoff doc and user approval to start.
