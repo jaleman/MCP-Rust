@@ -64,6 +64,9 @@ with page-level references back to the source PDFs.
   `kuka://images/…` resources. Search hits list the diagrams belonging to
   the matched section, and multimodal assistants can open and interpret
   them alongside the text.
+- **Two MCP transports**: stdio remains the default for local MCP clients;
+  optional streamable HTTP lets browser-based or remote clients connect to
+  the same server when you start it with `--http`.
 - **Live reload**: add or re-extract documents and refresh the index without
   restarting the server.
 - **Fast and lightweight**: the search index is built at startup in
@@ -75,7 +78,7 @@ with page-level references back to the source PDFs.
 | Binary | Purpose |
 |--------|---------|
 | `extract` | One-time / occasional: converts PDF, Office, and text files into the markdown "knowledge bundle" the server reads |
-| `mcp-server` | Long-running: serves the bundle to AI clients over MCP (stdio) |
+| `mcp-server` | Long-running: serves the bundle to AI clients over MCP (stdio by default, or streamable HTTP with `--http`) |
 
 ---
 
@@ -104,9 +107,11 @@ PDF/Office/TXT     text extraction +    markdown files with      inverted index 
    builds an inverted index (term → documents and positions). The bundle is
    trusted as already clean — everything in it is searchable.
 3. **Serving**: the AI client launches `mcp-server` and talks to it over
-   stdin/stdout. When you ask a KUKA question, the client calls the server's
-   search tool, receives ranked excerpts, and composes an answer grounded in
-   them.
+  stdin/stdout, or you start `mcp-server --http <addr>` and clients POST to
+  `/mcp` using MCP streamable HTTP. Both transports use the same tools,
+  resources, and shared search index. When you ask a KUKA question, the
+  client calls the server's search tool, receives ranked excerpts, and
+  composes an answer grounded in them.
 
 ---
 
@@ -170,7 +175,7 @@ Binaries appear under `target/x86_64-pc-windows-gnu/release/` (`.exe`).
 ### Verifying the build
 
 ```bash
-cargo test          # 42 tests should pass
+cargo test          # all tests should pass
 ./target/release/extract --help
 ```
 
@@ -232,7 +237,7 @@ Done: 11 extracted, 0 failed.
   several sections — is kept in full.
 - **Diagrams are extracted too**: embedded images larger than ~10 KB (small
   logos and header graphics are skipped, byte-identical duplicates removed,
-  capped at 20 per document) land in `knowledge/images/` and are linked to
+  capped at 60 per document) land in `knowledge/images/` and are linked to
   their chunk's page range via `images:` frontmatter.
 - If OCR was needed, the output frontmatter includes
   `tags: [extracted, ocr, technical-note]`. That tag is a useful reminder
@@ -329,6 +334,30 @@ support when working inside the devcontainer:
 }
 ```
 
+### Serving over HTTP (browser and remote clients)
+
+Stdio is still the default and remains the right choice for Claude Code,
+Claude Desktop, and VS Code when those clients can launch the binary
+directly. Use streamable HTTP when the client expects to connect to a URL,
+or when you are experimenting with browser-based MCP clients:
+
+```bash
+cd /workspaces/MCP-Rust
+./mcp-server/target/debug/mcp-server --http 127.0.0.1:8382
+```
+
+The MCP endpoint is `http://127.0.0.1:8382/mcp`. The same knowledge index is
+built once at startup and shared by every HTTP session; if any session calls
+`reload_docs`, later searches from other sessions see the refreshed index.
+
+HTTP mode has **no authentication** in this step. Bind to loopback
+(`127.0.0.1`) unless the service is protected by a local tunnel, firewall, or
+other access control. Binding `0.0.0.0` makes the server reachable from other
+machines on the network and logs a warning. Public internet deployment for
+Claude.ai connectors needs HTTPS and OAuth; that is outside this step. For a
+temporary experiment, put a tunnel such as `cloudflared` or `ngrok` in front
+of the loopback listener and treat the tunnel URL as sensitive.
+
 ### Verifying the connection
 
 Ask your client: *"ping the KUKA knowledge server"*. You should get back
@@ -423,6 +452,7 @@ files on disk without reloading leaves the index pointing at stale offsets.
 
 | Setting | Default | Meaning |
 |---------|---------|---------|
+| `--http <addr>` (CLI flag) | omitted | When omitted, serve MCP over stdin/stdout. When set, listen for streamable HTTP at `<addr>` and mount MCP at `/mcp`. Example: `--http 127.0.0.1:8382`. |
 | `KUKA_KNOWLEDGE_DIR` (env var) | `knowledge` (relative to the server's working directory) | Where the knowledge bundle lives. Read once at startup. |
 | `RUST_LOG` (env var) | off | Logging level, written to **stderr** (never stdout — that would corrupt the MCP stream). `RUST_LOG=info` logs the startup summary: documents, unique terms, index build time. |
 

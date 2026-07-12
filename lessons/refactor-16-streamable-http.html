@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Refactor Appendix 16: Streamable HTTP — One Server, Two Transports</title>
+    <link rel="stylesheet" href="../assets/style.css">
+</head>
+
+<body>
+    <div class="container">
+
+        <header class="lesson-header">
+            <div class="lesson-number">Refactor Appendix 16</div>
+            <h1>Streamable HTTP — One Server, Two Transports</h1>
+            <div class="lesson-meta">
+                <span>Refactor step 10</span>
+                <span>KUKA MCP Server in Rust</span>
+            </div>
+        </header>
+
+        <h2>Why add a second transport?</h2>
+
+        <p>
+            Until this step, the KUKA server spoke MCP only over stdio: a client starts
+            the binary, writes JSON-RPC to stdin, and reads replies from stdout. That is
+            perfect for local tools like Claude Code, Claude Desktop, and VS Code. It is
+            awkward for browser-based clients, though, because browsers and remote MCP
+            clients naturally connect to URLs. Streamable HTTP adds that URL shape while
+            preserving the existing no-flag stdio behavior.
+        </p>
+
+        <p>
+            The important architectural rule is that transport is wiring, not domain
+            logic. Search, resources, reloads, and the index stay exactly where they
+            were. The new branch in <code>main()</code> decides only how requests reach
+            the same <code>KukaServer</code>.
+        </p>
+
+        <h2>The CLI switch</h2>
+
+        <p>
+            Clap turns command-line arguments into a small typed struct:
+        </p>
+
+        <p><strong>Rust:</strong></p>
+        <pre><code>#[derive(Debug, Parser)]
+struct Args {
+    /// Listen address for streamable HTTP, e.g. 127.0.0.1:8382. Omit for stdio.
+    #[arg(long)]
+    http: Option&lt;String&gt;,
+}</code></pre>
+
+        <p><strong>Java equivalent:</strong></p>
+        <pre><code>record Args(Optional&lt;String&gt; http) {}
+
+Args args = parseArgs(argv);          // picocli, Spring Boot, or your own parser
+if (args.http().isPresent()) {
+    serveHttp(args.http().get());
+} else {
+    serveStdio();
+}</code></pre>
+
+        <p>
+            <code>Option&lt;String&gt;</code> is doing the same job as Java's
+            <code>Optional&lt;String&gt;</code>: the flag may be absent, and the absence is a
+            value the compiler forces us to handle. The match in <code>main()</code> is
+            the whole compatibility promise:
+        </p>
+
+        <pre><code>let server = KukaServer::new(knowledge_dir, index);
+match args.http {
+    None =&gt; {
+        let service = server.serve(stdio()).await?;
+        service.waiting().await?;
+    }
+    Some(addr) =&gt; serve_http(addr, server).await?,
+}</code></pre>
+
+        <h2>Axum as the embedded web server</h2>
+
+        <p>
+            In Java, this shape might be an embedded Jetty server, a Spring Boot
+            controller, or a servlet filter chain. In Rust, <code>axum</code> is the
+            small HTTP server layer, and <code>rmcp</code> provides a Tower service that
+            already knows the MCP streamable-HTTP protocol:
+        </p>
+
+        <pre><code>let service = StreamableHttpService::new(
+    move || Ok(server.clone()),
+    Arc::new(LocalSessionManager::default()),
+    StreamableHttpServerConfig::default(),
+);
+let app = Router::new().route_service("/mcp", service);
+let listener = tokio::net::TcpListener::bind(socket_addr).await?;
+axum::serve(listener, app).await?;</code></pre>
+
+        <p>
+            The Java mental model is: <code>StreamableHttpService</code> is not a
+            controller method we wrote; it is a reusable protocol component mounted at a
+            route. Tower services are Rust's composable request/response middleware
+            building blocks. Axum can route to them directly, much like a servlet
+            container can mount a servlet or filter that owns a whole protocol.
+        </p>
+
+        <h2>One index, many sessions</h2>
+
+        <p>
+            HTTP introduces sessions: the initialize response returns an
+            <code>Mcp-Session-Id</code>, and later requests send that header back. The
+            session manager is per HTTP listener, but every session gets a clone of the
+            same server handle:
+        </p>
+
+        <pre><code>move || Ok(server.clone())</code></pre>
+
+        <p>
+            That clone is cheap because <code>KukaServer</code> holds the index as
+            <code>Arc&lt;RwLock&lt;Index&gt;&gt;</code>, introduced in
+            <a href="refactor-10-arc-rwlock-reload.html">Appendix 10</a>. In Java
+            terms, each session receives another reference to the same service object,
+            and the service owns a thread-safe shared index. When one session calls
+            <code>reload_docs</code>, the write lock swaps the index and later searches
+            from every session see the new data.
+        </p>
+
+        <h2>The security boundary is the bind address</h2>
+
+        <p>
+            This step deliberately does not add authentication. That keeps the learning
+            step small and keeps stdio clients unchanged, but it means HTTP mode should
+            bind to loopback by default:
+        </p>
+
+        <pre><code>mcp-server --http 127.0.0.1:8382</code></pre>
+
+        <p>
+            Binding <code>0.0.0.0</code> exposes the server to other machines on the
+            network, so the code logs a warning. Public Claude.ai-style deployment is a
+            different project: public HTTPS, OAuth, and operational access controls.
+            For experiments, a tunnel in front of the loopback listener is the interim
+            path.
+        </p>
+
+        <h2>Side-by-side summary</h2>
+
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>Java</th>
+                    <th>Rust</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>Optional&lt;String&gt;</code> CLI value</td>
+                    <td><code>Option&lt;String&gt;</code> with an exhaustive <code>match</code></td>
+                </tr>
+                <tr>
+                    <td>embedded Jetty / Spring Boot route</td>
+                    <td><code>axum::Router</code> mounted at <code>/mcp</code></td>
+                </tr>
+                <tr>
+                    <td>servlet or filter owning a protocol</td>
+                    <td>Tower <code>Service</code> from <code>rmcp</code></td>
+                </tr>
+                <tr>
+                    <td>shared singleton service with locks</td>
+                    <td><code>Arc&lt;RwLock&lt;Index&gt;&gt;</code> cloned into every session</td>
+                </tr>
+                <tr>
+                    <td>bind address plus auth/filter chain</td>
+                    <td>loopback bind now; HTTPS/OAuth later</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="ask-teacher">
+            <strong>Questions?</strong> Ask Claude directly. Good questions:
+            "Why is the MCP session manager separate from the shared search index?",
+            "What does Tower mean by Service?",
+            or "How would OAuth fit in front of this HTTP transport later?"
+        </div>
+
+        <nav class="lesson-nav">
+            <a href="refactor-15-serving-diagrams.html">← Refactor Appendix 15: Serving Diagrams</a>
+            <a href="refactor-10-arc-rwlock-reload.html">← Related: Appendix 10, Arc/RwLock Reload</a>
+        </nav>
+
+    </div>
+</body>
+
+</html>

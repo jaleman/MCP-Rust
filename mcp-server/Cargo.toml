@@ -9,15 +9,23 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.103"
+axum = { version = "0.8", default-features = false, features = [
+    "http1",
+    "tokio",
+] }
 base64 = "0.22"
 clap = { version = "4.6.1", features = ["derive"] }
 jiff = "0.2"
 pdf-extract = "0.12.0"
-rmcp = { version = "1.8.0", features = ["macros", "transport-io"] }
+rmcp = { version = "1.8.0", features = [
+    "macros",
+    "transport-io",
+    "transport-streamable-http-server",
+] }
 schemars = "1.2.1"
 serde = { version = "1.0.228", features = ["derive"] }
 strsim = "0.11.1"
-tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tempfile = "3.27.0"

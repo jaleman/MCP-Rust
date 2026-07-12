@@ -59,7 +59,7 @@ cargo is not installed on the Windows host.
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
-| 10 | streamable-HTTP transport (browser/remote clients) | in progress | branch refactor/step-10-http-transport created off master (8ae84dd); handed to Codex 2026-07-06 |
+| 10 | streamable-HTTP transport (browser/remote clients) | in progress | implemented + verified locally 2026-07-12; PR still needed |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -703,3 +703,15 @@ Newest entry last. Every status change in the dashboard gets a line here.
   wait for Codex's PR, then the usual review (verify content actually
   landed on master, not just the merge label; run tests; check the
   curl acceptance sequence; flip dashboard; clean up branch).
+- 2026-07-12 — STEP 10 IMPLEMENTED on branch refactor/step-10-http-transport.
+  mcp-server now accepts optional `--http <addr>`; no flag still uses stdio.
+  Added rmcp streamable HTTP feature, axum 0.8 mount at `/mcp`, tokio net,
+  clap Args tests, loopback/no-auth warning, devcontainer port 8382, manual
+  HTTP section, and lesson refactor-16-streamable-http.html. Verification:
+  local devcontainer cargo path used because `docker` is unavailable inside
+  this VS Code container. `cargo clippy --manifest-path mcp-server/Cargo.toml
+  --all-targets` clean; `cargo test --manifest-path mcp-server/Cargo.toml`
+  passed 55/55; debug binary rebuilt. Live HTTP curl initialize returned
+  Mcp-Session-Id and `search_docs` for "mission status payload" returned
+  Found 4 result(s); no-flag stdio printf-pipe returned the same Found 4
+  result(s). Next action: review diff, commit, push, and open PR to master.
