@@ -1004,3 +1004,35 @@ Newest entry last. Every status change in the dashboard gets a line here.
   "three-color indicator light meaning" and "three-color light tower signal
   column" now return BA_KMF_1500P-CB pages instead of No results. Next
   action: commit, push, and open PR to master.
+- 2026-07-12 — CLAUDE INDEPENDENT REVIEW of Codex's step 11 work (before
+  opening the PR, same protocol as steps 8/9a/10/12). Code matches
+  designs/step-11-soft-and-ranking.md exactly: candidate set changed from
+  intersection to union in Index::search, per-document coverage (distinct
+  matched-term count) computed via `.filter_map`/`.get` instead of the old
+  panicking `m[&doc_id]` direct index, sort key changed to
+  `(coverage DESC, score DESC)`, early-return on empty candidates preserved
+  so a query where NO term matches anywhere still returns empty. Two new
+  tests are well-constructed: search_ranks_full_coverage_above_partial_
+  coverage deliberately gives the partial-match fixture a HIGHER raw
+  frequency score than the full-match fixture, so the test only passes if
+  coverage is genuinely checked before score (not just coincidentally
+  ordered). Re-ran everything independently in the devcontainer rather
+  than trusting the self-reported numbers: cargo clippy --all-targets
+  clean, cargo test 59/59 (44 lib + 6 extract-bin + 9 main-bin), debug
+  binary rebuilt. Live stdio repro of both trace queries that previously
+  returned "No results": "three-color indicator light meaning" and
+  "three-color light tower signal column" now both return pages 9-15
+  (BA_KMF_1500P-CB components list, which literally says "Three-color
+  indicator light") as the TOP-ranked hit — not just present somewhere in
+  a long list. Also independently verified the honest-empty case still
+  works: a query of fabricated nonsense words ("zephyroxide quixotic
+  flibbertigibbet") still returns "No results found... try again with
+  fewer or different terms," confirming soft-AND did not turn into
+  always-return-something. Note: an earlier control-query attempt using
+  "hydraulic pump zephyr" was a bad choice on my part, not a bug — this
+  KMF manual has a real forklift hydraulic-maintenance section, so
+  "hydraulic" is genuine content in the actual bundle (unlike the
+  synthetic reflector-only test fixtures). PR opened to master. Next
+  action: user reviews/merges; then verify content lands on master (not
+  just the merge label), flip dashboard to complete, clean up branch.
+  Steps 13 and 14 remain not started.
