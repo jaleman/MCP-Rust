@@ -60,7 +60,7 @@ cargo is not installed on the Windows host.
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
-| 11 | soft-AND / coverage-ranked matching in search_docs | in progress | design doc designs/step-11-soft-and-ranking.md; handed to Codex on branch refactor/step-11-soft-and-ranking; see §11 |
+| 11 | soft-AND / coverage-ranked matching in search_docs | in progress | implemented locally 2026-07-12; verification/PR still needed |
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
 | 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | not started | designed 2026-07-12; see §13 |
 | 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | not started | designed 2026-07-12; see §14 |
@@ -991,3 +991,16 @@ Newest entry last. Every status change in the dashboard gets a line here.
   repro the trace queries that previously returned empty; flip dashboard;
   clean up branch). Steps 13 and 14 remain not started, to be handed off
   separately after step 11 lands.
+- 2026-07-12 — STEP 11 IMPLEMENTED locally on branch
+  refactor/step-11-soft-and-ranking. Index::search now uses soft-AND
+  candidate union and ranks by distinct query-term coverage before the
+  existing length-normalized score. A term that matches nowhere no longer
+  erases otherwise useful partial matches, while a query where no term
+  matches anywhere still returns empty and keeps the existing no-results
+  retry hint. Added focused tests for partial-match recall and full-
+  coverage-over-score ranking, updated USER-MANUAL §7, and wrote lesson
+  refactor-18-soft-and-ranking.html. Verification: clippy clean,
+  59/59 tests pass, debug binary rebuilt, and live stdio repro queries
+  "three-color indicator light meaning" and "three-color light tower signal
+  column" now return BA_KMF_1500P-CB pages instead of No results. Next
+  action: commit, push, and open PR to master.

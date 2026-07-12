@@ -439,12 +439,13 @@ Found 2 result(s) for 'mission status':
   Message to inform the customer of mission status. ...
 ```
 
-- Results are ordered by relevance: how *densely* a document mentions your
-  terms, not just how often. A focused 2-page note beats a long manual with
-  scattered mentions.
-- **All terms must match** (after stop-word removal). No results usually
-  means one of your words appears nowhere in the bundle — drop or replace
-  the rarest word and retry.
+- Results are ordered by relevance: documents matching more distinct query
+  terms rank first, then ties are ordered by how *densely* those terms appear.
+  A focused 2-page note still beats a long manual with scattered mentions.
+- Search uses soft matching across terms. If one guessed word is absent but
+  the other words match a document, that partial match can still surface.
+  No results means none of the meaningful terms appeared anywhere in the
+  bundle — drop or replace the rarest word and retry.
 - Very short terms (1-2 characters) match only exact words. This keeps
   section numbers and single digits from matching every date, page number,
   or part number that happens to contain the same character.
