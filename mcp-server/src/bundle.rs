@@ -29,6 +29,11 @@ pub struct Document {
     /// Diagram filenames under knowledge/images/ belonging to this document
     /// (from the optional `images:` frontmatter list). Empty when absent.
     pub images: Vec<String>,
+    /// For chunked documents: the parent document slug and this chunk's page
+    /// range, from optional `parent:` / `pages:` frontmatter. None for
+    /// single-file documents.
+    pub parent: Option<String>,
+    pub pages: Option<String>,
 }
 
 impl Document {
@@ -51,6 +56,8 @@ impl Document {
             .unwrap_or_else(|| "uncategorised".to_string());
         let resource = extract_frontmatter_field(&content, "resource").unwrap_or_default();
         let description = extract_frontmatter_field(&content, "description");
+        let parent = extract_frontmatter_field(&content, "parent");
+        let pages = extract_frontmatter_field(&content, "pages");
 
         // "images: [a.png, b.png]" → vec of bare filenames; absent → empty
         let images: Vec<String> = extract_frontmatter_field(&content, "images")
@@ -79,6 +86,8 @@ impl Document {
             content,
             body_start,
             images,
+            parent,
+            pages,
         })
     }
 
@@ -147,9 +156,40 @@ mod tests {
         assert_eq!(doc.title, "Reflector Guide");
         assert_eq!(doc.doc_type, "technical-note");
         assert_eq!(doc.resource, "kuka-docs/test.pdf");
-        assert_eq!(doc.description, Some("Test document for integration tests.".to_string()));
+        assert_eq!(
+            doc.description,
+            Some("Test document for integration tests.".to_string())
+        );
+        assert_eq!(doc.parent, None);
+        assert_eq!(doc.pages, None);
         // body() must start AFTER the frontmatter block
-        assert!(doc.body().trim_start().starts_with("Reflectors must be mounted"));
+        assert!(
+            doc.body()
+                .trim_start()
+                .starts_with("Reflectors must be mounted")
+        );
+    }
+
+    #[test]
+    fn document_load_parses_chunk_parent_and_pages() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let doc = "\
+---
+type: manual
+title: Fleet Manual (pages 9-15)
+resource: kuka-docs/fleet.pdf
+parent: fleet-manual
+pages: 9-15
+---
+
+Chunk body.";
+        let path = temp_dir.path().join("fleet-manual-p009-015.md");
+        fs::write(&path, doc).unwrap();
+
+        let doc = Document::load(&path).unwrap();
+
+        assert_eq!(doc.parent.as_deref(), Some("fleet-manual"));
+        assert_eq!(doc.pages.as_deref(), Some("9-15"));
     }
 
     #[test]
@@ -159,7 +199,10 @@ mod tests {
         let result = load_bundle(Path::new("no-such-directory-anywhere"));
         assert!(result.is_err(), "missing dir should be an error");
         let msg = format!("{:#}", result.unwrap_err());
-        assert!(msg.contains("no-such-directory-anywhere"), "error should name the path");
+        assert!(
+            msg.contains("no-such-directory-anywhere"),
+            "error should name the path"
+        );
     }
 
     #[test]

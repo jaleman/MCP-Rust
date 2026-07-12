@@ -44,6 +44,11 @@ pub struct DocMeta {
     pub body_start: usize,
     /// Diagram filenames under knowledge/images/ for this document.
     pub images: Vec<String>,
+    /// Stem of the chunk that continues this one. None for final chunks and
+    /// unchunked documents.
+    pub next_stem: Option<String>,
+    parent: Option<String>,
+    pages: Option<String>,
     /// Tokens in the body — the denominator for length-normalised scoring.
     token_count: usize,
 }
@@ -112,10 +117,15 @@ impl Index {
                 description: doc.description,
                 body_start: doc.body_start,
                 images: doc.images,
+                next_stem: None,
+                parent: doc.parent,
+                pages: doc.pages,
                 token_count,
             });
             // doc.content is dropped here — bodies never stay in memory
         }
+
+        populate_next_stems(&mut docs);
 
         Ok(Index { docs, vocab })
     }
@@ -255,6 +265,7 @@ impl Index {
                     title: meta.title.clone(),
                     stem: meta.stem.clone(),
                     images: meta.images.clone(),
+                    continues: meta.next_stem.clone(),
                     // Frequency normalised by document length (×1000 to stay
                     // integral): a focused 2-page note now outranks a long manual
                     // with the same number of scattered mentions.
@@ -266,6 +277,40 @@ impl Index {
 
         ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.score.cmp(&a.1.score)));
         ranked.into_iter().map(|(_, hit)| hit).collect()
+    }
+}
+
+fn populate_next_stems(docs: &mut [DocMeta]) {
+    let mut families: HashMap<String, Vec<(u32, usize)>> = HashMap::new();
+    for (idx, doc) in docs.iter().enumerate() {
+        let (Some(parent), Some(pages)) = (&doc.parent, &doc.pages) else {
+            continue;
+        };
+        let Some(start) = pages
+            .split('-')
+            .next()
+            .and_then(|page| page.trim().parse::<u32>().ok())
+        else {
+            continue;
+        };
+        families
+            .entry(parent.clone())
+            .or_default()
+            .push((start, idx));
+    }
+
+    let mut links: Vec<(usize, String)> = Vec::new();
+    for chunks in families.values_mut() {
+        chunks.sort_unstable();
+        for pair in chunks.windows(2) {
+            let (_, this_idx) = pair[0];
+            let (_, next_idx) = pair[1];
+            links.push((this_idx, docs[next_idx].stem.clone()));
+        }
+    }
+
+    for (idx, next_stem) in links {
+        docs[idx].next_stem = Some(next_stem);
     }
 }
 
@@ -354,6 +399,86 @@ mod tests {
             "body words should be in the vocabulary"
         );
         assert_eq!(index.docs()[0].title, "Reflector Guide");
+    }
+
+    fn write_chunk(dir: &Path, stem: &str, title: &str, pages: &str, body: &str) {
+        let doc = format!(
+            "---\ntype: manual\ntitle: {title}\nresource: kuka-docs/fleet.pdf\nparent: fleet-manual\npages: {pages}\n---\n\n{body}"
+        );
+        fs::write(dir.join(format!("{stem}.md")), doc).unwrap();
+    }
+
+    #[test]
+    fn build_computes_next_stem_chain() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        write_chunk(
+            temp_dir.path(),
+            "fleet-manual-p016-020",
+            "Fleet Manual (pages 16-20)",
+            "16-20",
+            "Final chunk text.",
+        );
+        write_chunk(
+            temp_dir.path(),
+            "fleet-manual-p001-008",
+            "Fleet Manual (pages 1-8)",
+            "1-8",
+            "Opening chunk text.",
+        );
+        write_chunk(
+            temp_dir.path(),
+            "fleet-manual-p009-015",
+            "Fleet Manual (pages 9-15)",
+            "9-15",
+            "Middle chunk text.",
+        );
+        let single = "---\ntype: manual\ntitle: Single Doc\nresource: kuka-docs/single.pdf\n---\n\nStandalone text.";
+        fs::write(temp_dir.path().join("single-doc.md"), single).unwrap();
+
+        let index = Index::build(temp_dir.path()).unwrap();
+        let next_for = |stem: &str| {
+            index
+                .docs()
+                .iter()
+                .find(|doc| doc.stem == stem)
+                .and_then(|doc| doc.next_stem.as_deref())
+        };
+
+        assert_eq!(
+            next_for("fleet-manual-p001-008"),
+            Some("fleet-manual-p009-015")
+        );
+        assert_eq!(
+            next_for("fleet-manual-p009-015"),
+            Some("fleet-manual-p016-020")
+        );
+        assert_eq!(next_for("fleet-manual-p016-020"), None);
+        assert_eq!(next_for("single-doc"), None);
+    }
+
+    #[test]
+    fn search_hit_carries_continues() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        write_chunk(
+            temp_dir.path(),
+            "fleet-manual-p001-008",
+            "Fleet Manual (pages 1-8)",
+            "1-8",
+            "Opening chunk text.",
+        );
+        write_chunk(
+            temp_dir.path(),
+            "fleet-manual-p009-015",
+            "Fleet Manual (pages 9-15)",
+            "9-15",
+            "Middle continuation target.",
+        );
+
+        let hits = run_search(temp_dir.path(), "opening");
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].stem, "fleet-manual-p001-008");
+        assert_eq!(hits[0].continues.as_deref(), Some("fleet-manual-p009-015"));
     }
 
     #[test]

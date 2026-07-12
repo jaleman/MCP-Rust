@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Refactor Appendix 19: Chunk Continuity — Helping Agents Keep Reading</title>
+    <link rel="stylesheet" href="../assets/style.css">
+</head>
+
+<body>
+    <div class="container">
+
+        <header class="lesson-header">
+            <div class="lesson-number">Refactor Appendix 19</div>
+            <h1>Chunk Continuity — Helping Agents Keep Reading</h1>
+            <div class="lesson-meta">
+                <span>Refactor step 13</span>
+                <span>KUKA MCP Server in Rust</span>
+            </div>
+        </header>
+
+        <h2>Why continuity belongs in the tool output</h2>
+
+        <p>
+            Page chunking made large manuals safe for agents to read: every
+            <code>kuka://docs/...</code> resource is small. The tradeoff is that a
+            table or section can cross a chunk boundary. In the real trace that
+            drove this step, the indicator-light table started on one chunk and
+            continued on the next, but the search hit did not say where to go.
+        </p>
+
+        <p>
+            The extractor already wrote the needed metadata: <code>parent</code>
+            names the original source document and <code>pages</code> records the
+            chunk's page range. Step 13 stops discarding those fields, computes
+            the next chunk once during indexing, and surfaces that fact in both
+            places an agent sees content: search results and resource reads.
+        </p>
+
+        <h2>Carrying metadata forward</h2>
+
+        <p>
+            The bundle loader now keeps <code>parent</code> and <code>pages</code> on
+            each document. The index copies them into <code>DocMeta</code> and adds
+            a derived <code>next_stem</code> field.
+        </p>
+
+        <p><strong>Rust:</strong></p>
+        <pre><code>pub struct Document {
+    pub stem: String,
+    pub title: String,
+    pub parent: Option&lt;String&gt;,
+    pub pages: Option&lt;String&gt;,
+    pub content: String,
+}
+
+pub struct DocMeta {
+    pub stem: String,
+    pub title: String,
+    pub next_stem: Option&lt;String&gt;,
+    parent: Option&lt;String&gt;,
+    pages: Option&lt;String&gt;,
+}</code></pre>
+
+        <p><strong>Java equivalent:</strong></p>
+        <pre><code>record Document(
+    String stem,
+    String title,
+    Optional&lt;String&gt; parent,
+    Optional&lt;String&gt; pages,
+    String content
+) {}
+
+final class DocMeta {
+    String stem;
+    String title;
+    Optional&lt;String&gt; nextStem = Optional.empty();
+    Optional&lt;String&gt; parent;
+    Optional&lt;String&gt; pages;
+}</code></pre>
+
+        <h2>Computing the next chunk once</h2>
+
+        <p>
+            Instead of guessing from filenames at presentation time, the index
+            groups chunks by <code>parent</code>, sorts each group by the starting
+            page parsed from <code>pages</code>, and writes each chunk's successor.
+            Search can then copy this cheap string into <code>SearchHit</code>.
+        </p>
+
+        <p><strong>Rust:</strong></p>
+        <pre><code>fn populate_next_stems(docs: &amp;mut [DocMeta]) {
+    let mut by_parent: HashMap&lt;String, Vec&lt;(usize, u32)&gt;&gt; = HashMap::new();
+    for (index, doc) in docs.iter().enumerate() {
+        if let (Some(parent), Some(start_page)) = (&amp;doc.parent, doc.start_page()) {
+            by_parent.entry(parent.clone()).or_default().push((index, start_page));
+        }
+    }
+
+    for chunks in by_parent.values_mut() {
+        chunks.sort_by_key(|(_, start_page)| *start_page);
+        for pair in chunks.windows(2) {
+            let current = pair[0].0;
+            let next = pair[1].0;
+            docs[current].next_stem = Some(docs[next].stem.clone());
+        }
+    }
+}</code></pre>
+
+        <p><strong>Java equivalent:</strong></p>
+        <pre><code>Map&lt;String, List&lt;ChunkRef&gt;&gt; byParent = new HashMap&lt;&gt;();
+for (int i = 0; i &lt; docs.size(); i++) {
+    DocMeta doc = docs.get(i);
+    doc.startPage().ifPresent(start -&gt;
+        doc.parent.ifPresent(parent -&gt;
+            byParent.computeIfAbsent(parent, p -&gt; new ArrayList&lt;&gt;())
+                    .add(new ChunkRef(i, start))));
+}
+
+for (List&lt;ChunkRef&gt; chunks : byParent.values()) {
+    chunks.sort(Comparator.comparingInt(ChunkRef::startPage));
+    for (int i = 0; i &lt; chunks.size() - 1; i++) {
+        docs.get(chunks.get(i).index()).nextStem =
+            Optional.of(docs.get(chunks.get(i + 1).index()).stem);
+    }
+}</code></pre>
+
+        <h2>Surfacing the hint where agents look</h2>
+
+        <p>
+            Search hits now show a <code>Continues:</code> line only when one exists.
+            Reading the full resource also appends a short trailer. That matters
+            because an agent may skip search once it has opened a resource.
+        </p>
+
+        <pre><code>if let Some(next) = &amp;hit.continues {
+    out.push_str(&amp;format!("\n  Continues: kuka://docs/{next}"));
+}
+
+if let Some(next) = continues {
+    content.push_str(&amp;format!(
+        "\n\n---\n[This section continues in kuka://docs/{next}]"
+    ));
+}</code></pre>
+
+        <h2>What the tests prove</h2>
+
+        <p>
+            The index tests prove the derived chain: a two-chunk fixture sets
+            the first chunk's <code>next_stem</code> to the second chunk and leaves
+            the final chunk empty. The search test proves <code>SearchHit</code>
+            carries that value. The binary tests prove the MCP presentation
+            actually says <code>Continues: kuka://docs/...</code> and appends the
+            resource trailer.
+        </p>
+
+        <h2>Side-by-side summary</h2>
+
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>Java</th>
+                    <th>Rust</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>Optional&lt;String&gt;</code> for absent metadata</td>
+                    <td><code>Option&lt;String&gt;</code></td>
+                </tr>
+                <tr>
+                    <td><code>Map&lt;String, List&lt;ChunkRef&gt;&gt;</code></td>
+                    <td><code>HashMap&lt;String, Vec&lt;(usize, u32)&gt;&gt;</code></td>
+                </tr>
+                <tr>
+                    <td><code>subList</code> or index loop over neighbors</td>
+                    <td><code>windows(2)</code></td>
+                </tr>
+                <tr>
+                    <td>Render optional field only when present</td>
+                    <td><code>if let Some(next) = ...</code></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="ask-teacher">
+            <strong>Questions?</strong> Ask Claude directly. Good questions:
+            "Why compute next_stem during indexing instead of in format_hit?",
+            "What happens if a chunk is missing?", or "Why add the trailer to
+            read_resource as well as search_docs?"
+        </div>
+
+        <nav class="lesson-nav">
+            <a href="refactor-18-soft-and-ranking.html">← Refactor Appendix 18: Soft-AND Ranking</a>
+            <a href="refactor-08-page-chunking.html">← Related: Appendix 8, Page Chunking</a>
+        </nav>
+
+    </div>
+</body>
+
+</html>

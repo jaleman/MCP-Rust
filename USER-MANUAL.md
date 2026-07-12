@@ -426,6 +426,9 @@ Every bundle file is also exposed as an MCP resource with URI
 Clients that support resources (Claude Desktop's attachment picker, for
 example) can pull a full chunk into context when excerpts aren't enough.
 Chunks are ~8 KB by design, so a whole one always fits comfortably.
+When a chunk continues into another chunk from the same source document,
+the resource text ends with a `This section continues in kuka://docs/…`
+trailer so the assistant can keep reading without guessing the next file.
 
 ### How to read search results
 
@@ -458,6 +461,9 @@ Found 2 result(s) for 'mission status':
 - The `Resource:` line is the follow-up step: if the excerpts don't contain
   the full answer, that URI reads the whole section. Tool output never
   contains source-file paths — agents work entirely through the server.
+- A `Continues:` line (when present) means this chunk is not the final chunk
+  from its source document. Read that URI next when the answer appears to
+  continue past the shown excerpts.
 - A `Diagrams:` line (when present) lists `kuka://images/…` resources — the
   images extracted from that section's pages. Ask the assistant to open one
   ("show me that diagram") and it can view and explain the picture.

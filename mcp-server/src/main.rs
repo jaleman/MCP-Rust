@@ -138,6 +138,33 @@ impl KukaServer {
     }
 }
 
+impl KukaServer {
+    fn read_doc_resource_content(&self, stem: &str, uri: &str) -> Result<String, McpError> {
+        let path = self.knowledge_dir.join(format!("{stem}.md"));
+        let mut content = std::fs::read_to_string(&path).map_err(|_| McpError {
+            code: ErrorCode::RESOURCE_NOT_FOUND,
+            message: format!("Resource not found: {uri}").into(),
+            data: None,
+        })?;
+
+        let continues = {
+            let index = self.index.read().unwrap();
+            index
+                .docs()
+                .iter()
+                .find(|doc| doc.stem == stem)
+                .and_then(|doc| doc.next_stem.clone())
+        };
+        if let Some(next) = continues {
+            content.push_str(&format!(
+                "\n\n---\n[This section continues in kuka://docs/{next}]"
+            ));
+        }
+
+        Ok(content)
+    }
+}
+
 // The presentation layer for search: runs the engine (index.rs, which returns
 // plain SearchHit data) and formats the outcome as an MCP tool result. All
 // user-facing wording lives here, none of it in the engine.
@@ -200,6 +227,9 @@ fn format_hit(hit: &SearchHit) -> String {
             .map(|image| format!("kuka://images/{image}"))
             .collect();
         out.push_str(&format!("\n  Diagrams: {}", uris.join(", ")));
+    }
+    if let Some(next) = &hit.continues {
+        out.push_str(&format!("\n  Continues: kuka://docs/{next}"));
     }
     out.push_str(&format!("\n\n  ...{}...", hit.excerpts.join("\n\n  ...")));
     out
@@ -357,12 +387,7 @@ impl ServerHandler for KukaServer {
             });
         }
 
-        let path = self.knowledge_dir.join(format!("{stem}.md"));
-        let content = std::fs::read_to_string(&path).map_err(|_| McpError {
-            code: ErrorCode::RESOURCE_NOT_FOUND,
-            message: format!("Resource not found: {uri}").into(),
-            data: None,
-        })?;
+        let content = self.read_doc_resource_content(stem, uri)?;
 
         Ok(ReadResourceResult::new(vec![ResourceContents::text(
             content,
@@ -577,6 +602,80 @@ Reflectors must be mounted at a height of 150 to 2000 mm above floor level.";
         assert_eq!(text.matches('•').count(), MAX_HITS_SHOWN);
         assert!(text.contains("…5 more result(s) omitted"));
         assert!(text.contains("Add more specific terms"));
+    }
+
+    fn write_chunk(dir: &std::path::Path, stem: &str, title: &str, pages: &str, body: &str) {
+        let doc = format!(
+            "---\ntype: manual\ntitle: {title}\nresource: kuka-docs/fleet.pdf\nparent: fleet-manual\npages: {pages}\n---\n\n{body}"
+        );
+        fs::write(dir.join(format!("{stem}.md")), doc).unwrap();
+    }
+
+    #[test]
+    fn search_tool_shows_continues_line() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        write_chunk(
+            temp_dir.path(),
+            "fleet-manual-p001-008",
+            "Fleet Manual (pages 1-8)",
+            "1-8",
+            "Opening uniquealpha chunk text.",
+        );
+        write_chunk(
+            temp_dir.path(),
+            "fleet-manual-p009-015",
+            "Fleet Manual (pages 9-15)",
+            "9-15",
+            "Final uniquebeta chunk text.",
+        );
+        let server = server_over(&temp_dir);
+
+        let first = server
+            .search_docs(Parameters(SearchInput {
+                query: "uniquealpha".to_string(),
+            }))
+            .unwrap();
+        let first_text = result_text(&first);
+        assert!(first_text.contains("Continues: kuka://docs/fleet-manual-p009-015"));
+
+        let second = server
+            .search_docs(Parameters(SearchInput {
+                query: "uniquebeta".to_string(),
+            }))
+            .unwrap();
+        let second_text = result_text(&second);
+        assert!(!second_text.contains("Continues:"));
+    }
+
+    #[test]
+    fn read_resource_appends_continuation_trailer() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        write_chunk(
+            temp_dir.path(),
+            "fleet-manual-p001-008",
+            "Fleet Manual (pages 1-8)",
+            "1-8",
+            "Opening chunk body.",
+        );
+        write_chunk(
+            temp_dir.path(),
+            "fleet-manual-p009-015",
+            "Fleet Manual (pages 9-15)",
+            "9-15",
+            "Final chunk body.",
+        );
+        let server = server_over(&temp_dir);
+
+        let first = server
+            .read_doc_resource_content("fleet-manual-p001-008", "kuka://docs/fleet-manual-p001-008")
+            .unwrap();
+        assert!(first.contains("[This section continues in kuka://docs/fleet-manual-p009-015]"));
+
+        let second = server
+            .read_doc_resource_content("fleet-manual-p009-015", "kuka://docs/fleet-manual-p009-015")
+            .unwrap();
+        assert!(second.contains("Final chunk body."));
+        assert!(!second.contains("This section continues"));
     }
 
     #[test]
