@@ -17,8 +17,8 @@
 
 use crate::bundle::load_bundle;
 use crate::search::{
-    EXCERPT_AFTER, EXCERPT_BEFORE, MAX_EXCERPTS, PROXIMITY_WINDOW, SearchHit,
-    within_typo_tolerance,
+    EXCERPT_AFTER, EXCERPT_BEFORE, MAX_EXCERPTS, MIN_SUBSTRING_TERM_LEN, PROXIMITY_WINDOW,
+    SearchHit, within_typo_tolerance,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -139,7 +139,13 @@ impl Index {
     fn matching_keys(&self, term: &str) -> Vec<&str> {
         self.vocab
             .keys()
-            .filter(|key| key.contains(term) || within_typo_tolerance(key, term))
+            .filter(|key| {
+                if term.len() < MIN_SUBSTRING_TERM_LEN {
+                    key.as_str() == term
+                } else {
+                    key.contains(term) || within_typo_tolerance(key, term)
+                }
+            })
             .map(String::as_str)
             .collect()
     }
@@ -437,6 +443,26 @@ Code 0 means KMP 250P";
     fn search_returns_no_hits_for_unknown_query() {
         let temp_dir = setup_test_bundle();
         assert!(run_search(temp_dir.path(), "hydraulic pump").is_empty());
+    }
+
+    #[test]
+    fn matching_keys_requires_exact_match_below_minimum_term_length() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let doc = "\
+---
+type: technical-note
+title: Dated Note
+resource: kuka-docs/dated.pdf
+---
+
+This note was revised in 2026.";
+        fs::write(temp_dir.path().join("dated-note.md"), doc).unwrap();
+
+        assert!(
+            run_search(temp_dir.path(), "2").is_empty(),
+            "single-character terms must not substring-match tokens like 2026"
+        );
+        assert_eq!(run_search(temp_dir.path(), "2026").len(), 1);
     }
 
     #[test]

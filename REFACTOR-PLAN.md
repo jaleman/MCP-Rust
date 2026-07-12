@@ -61,7 +61,7 @@ cargo is not installed on the Windows host.
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
 | 11 | soft-AND / coverage-ranked matching in search_docs | not started | designed 2026-07-12; see §11 |
-| 12 | minimum term length + hit-count cap on search_docs output | in progress | design doc designs/step-12-result-bounds.md; handed to Codex on branch refactor/step-12-result-bounds; see §12 |
+| 12 | minimum term length + hit-count cap on search_docs output | in progress | implemented + verified locally 2026-07-12; PR still needed |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -841,3 +841,39 @@ Newest entry last. Every status change in the dashboard gets a line here.
   repro the "2.2.9" query no longer overflows; flip dashboard; clean up
   branch). Step 11 (soft-AND ranking) remains not started, to be handed off
   separately after step 12 lands.
+- 2026-07-12 — STEP 12 IMPLEMENTED locally on branch
+  refactor/step-12-result-bounds. Added MIN_SUBSTRING_TERM_LEN = 3 so
+  1-2 character terms require exact vocab-key matches in matching_keys,
+  preserving the existing 3-character "amr" substring behavior while
+  preventing single digits from matching dates/section numbers everywhere.
+  Added MAX_HITS_SHOWN = 20 in run_search so broad queries format only the
+  top-ranked hits and include an explicit omitted-count trailer. Added
+  focused tests in index.rs and main.rs, updated USER-MANUAL §7, and wrote
+  lesson refactor-17-bounding-search-output.html. Verification: clippy
+  clean, 57/57 tests pass, debug binary rebuilt, and live stdio
+  search_docs("2.2.9") returned 24 results showing top 20 with an omitted
+  trailer instead of the previous 84K-character dump. Next action: commit,
+  push, and open PR to master.
+- 2026-07-12 — CLAUDE INDEPENDENT REVIEW of Codex's step 12 work (before
+  opening the PR, per the same protocol used for steps 8/9a/10). Code
+  matches designs/step-12-result-bounds.md exactly: MIN_SUBSTRING_TERM_LEN
+  = 3 added to search.rs's tuning-knob block and threaded into
+  matching_keys (index.rs) so terms below the threshold require an exact
+  vocab-key match instead of `.contains()`; MAX_HITS_SHOWN = 20 added to
+  main.rs and threaded into run_search with an honest "showing top N" /
+  "…M more result(s) omitted" trailer, never a silent truncation. Existing
+  3-character "amr" substring test untouched (regression-safe). Re-ran
+  everything independently via `docker exec` against kuka-mcp-server
+  (not just trusting Codex's self-reported numbers): `cargo clippy
+  --all-targets` clean, `cargo test` 57/57 (42 lib + 6 extract-bin +
+  9 main-bin, including the two new tests
+  matching_keys_requires_exact_match_below_minimum_term_length and
+  search_tool_caps_hit_count_with_trailer), debug binary rebuilt. Live
+  stdio repro of the exact query that previously overflowed: the JSON-RPC
+  `search_docs("2.2.9")` call now returns "Found 24 result(s) for '2.2.9',
+  showing top 20" + "…4 more result(s) omitted. Add more specific terms to
+  narrow the query." — 20 kuka://docs/ hits, ~35.8KB total, versus the
+  prior 84,646-character dump. PR opened to master. Next action: user
+  reviews/merges; then verify content lands on master (not just the merge
+  label), flip dashboard to complete, clean up branch. Step 11 (soft-AND
+  ranking) remains not started.

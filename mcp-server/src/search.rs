@@ -24,6 +24,11 @@ pub(crate) const MAX_EXCERPTS: usize = 3;
 /// produces too many false positives.
 pub(crate) const FUZZY_MIN_TERM_LEN: usize = 4;
 
+/// Terms shorter than this must match a vocabulary key exactly — substring
+/// containment on 1-2 character terms, especially digits, matches dates,
+/// section numbers, and part numbers across much of a real corpus.
+pub(crate) const MIN_SUBSTRING_TERM_LEN: usize = 3;
+
 /// Terms up to this length tolerate 1 typo; longer terms tolerate 2.
 pub(crate) const FUZZY_ONE_TYPO_MAX_LEN: usize = 7;
 

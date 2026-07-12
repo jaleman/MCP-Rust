@@ -445,6 +445,12 @@ Found 2 result(s) for 'mission status':
 - **All terms must match** (after stop-word removal). No results usually
   means one of your words appears nowhere in the bundle — drop or replace
   the rarest word and retry.
+- Very short terms (1-2 characters) match only exact words. This keeps
+  section numbers and single digits from matching every date, page number,
+  or part number that happens to contain the same character.
+- Broad searches are capped at the top 20 matching documents. If more
+  results exist, the response says how many were omitted and asks for more
+  specific terms rather than dumping an unbounded result set.
 - The `(pages N–M)` suffix in the title points you to the exact place in
   the original PDF (the source PDF's name is recorded in the bundle file's
   frontmatter).
