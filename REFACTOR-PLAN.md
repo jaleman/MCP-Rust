@@ -60,6 +60,8 @@ cargo is not installed on the Windows host.
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
+| 11 | soft-AND / coverage-ranked matching in search_docs | not started | designed 2026-07-12; see §11 |
+| 12 | minimum term length + hit-count cap on search_docs output | in progress | design doc designs/step-12-result-bounds.md; handed to Codex on branch refactor/step-12-result-bounds; see §12 |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -309,6 +311,70 @@ knowledge/images/, images: frontmatter per chunk, kuka://images/
 blob resources, "Diagrams:" lines in search hits. Multimodal agents can
 then read and interpret diagrams alongside text. Lesson refactor-15.
 Future roadmap note: vision-model captions to make diagrams searchable.
+
+## Step 11 — Soft-AND / coverage-ranked matching (added post-plan)
+
+Driven by a real cross-session investigation: two independent Sonnet 5
+sessions (this project's own agent and a separate VS Code session) both
+initially failed to find KUKA KMF 1500P-CB §2.2.9 "Indicator lights" via
+search_docs, despite the content being present and correctly indexed. Root
+cause confirmed by reading the code (`Index::search` in index.rs) AND the
+actual bundle file on disk — two compounding, verified failure modes, not
+one:
+
+- `Index::search` requires strict AND across every parsed query term: a
+  single term with zero vocabulary matches for a document empties the
+  ENTIRE result set for that document, even when the other terms would have
+  matched (index.rs: `if docs_for_term.is_empty() { return Vec::new(); }`).
+- "KMF" — an obviously reasonable term, it is literally the product line —
+  appears ONLY in a chunk's YAML frontmatter (`title:`, `resource:`), never
+  in `doc.body()`, and `Index::build` only tokenizes the body
+  (`tokenize(doc.body())`). Any query containing "kmf" therefore excludes
+  every chunk that never repeats the model number in running prose,
+  including `knowledge/ba_kmf_1500p-cb_series_en-20250512-p022-022.md`, the
+  exact chunk with the Automatic-mode indicator light table. Verified: that
+  file's body (past frontmatter) contains no occurrence of "kmf".
+- Page-boundary chunking (step 5a) can split one logical table across two
+  chunk files — the §2.2.9 color table spans `p022-022` (yellow/green) and
+  `p023-024` (red) — so a query needing terms from both halves can never
+  match a single chunk regardless of wording.
+
+Fix:
+- `Index::search` (index.rs) stops early-returning when a term matches
+  nowhere; each document's coverage (count of distinct matched query terms)
+  becomes the primary sort key, the existing length-normalised frequency
+  score the secondary key. Documents matching every term still rank first;
+  partial matches surface instead of vanishing.
+- `run_search`'s no-results message/retry-hint (main.rs) fires only when NO
+  term matched anywhere in the whole index — same wording, narrower
+  trigger.
+- New/updated index.rs tests: partial-term-coverage ranking, full-match
+  still outranks partial-match, existing no-match-anywhere test unchanged.
+
+## Step 12 — Bound worst-case search_docs output (added post-plan)
+
+Driven by a real failure observed live in this session: searching `"2.2.9"`
+tokenizes (on non-alphanumeric split, `parse_query`) into terms `"2"`,
+`"2"`, `"9"`. No minimum length guards substring matching
+(`key.contains(term)` in `matching_keys`, index.rs), so single-digit terms
+matched a huge fraction of the vocabulary — dates, page numbers, and
+section/part numbers appear on nearly every page of a 170-page manual.
+Compounding this, `run_search` (main.rs) formats every hit with no cap
+(`hits.iter().map(format_hit).collect()`). Result: an 84,646-character /
+2,117-line response — unusable in an agent's context window.
+
+Fix:
+- Enforce a minimum term length before substring containment is attempted
+  in `matching_keys` (index.rs) — terms below a small threshold (e.g. 3
+  chars) require an EXACT vocab-key match, not `contains`. (`FUZZY_MIN_TERM_LEN`
+  already gates fuzzy matching at 4 chars; substring matching currently has
+  no floor at all — this closes that gap.)
+- Cap the number of hits `run_search` actually formats (main.rs) to a fixed
+  top-N by score, with a trailer noting how many more hits were omitted and
+  suggesting a narrower query.
+- New tests: a short numeric-heavy query no longer overflows; a query
+  matching more than the cap returns exactly the cap plus a truncation
+  notice.
 
 ## Step 5c — Escape hatch (designed in, not built)
 
@@ -744,4 +810,34 @@ Newest entry last. Every status change in the dashboard gets a line here.
   diagram captioning for searchability, OCR for the one image-only PDF
   that still needs it if ever revisited, and — noted in step 10's own
   design as explicitly out of scope — public HTTPS/OAuth for real
-  claude.ai connector exposure (a natural step 11 if that's ever wanted).
+  claude.ai connector exposure (a natural future step if that's ever wanted).
+- 2026-07-12 — STEPS 11 AND 12 DESIGNED (not started). Driven by a live
+  cross-session investigation, not a hypothetical: a separate VS Code
+  Sonnet 5 session and this session both initially failed to find KUKA KMF
+  1500P-CB §2.2.9 "Indicator lights" via search_docs. Diagnosis (verified
+  against index.rs and the actual knowledge/ bundle file, not guessed):
+  strict-AND matching in `Index::search` (step 11) combined with "KMF"
+  living only in chunk frontmatter — never indexed, since only
+  `doc.body()` is tokenized — and the Automatic-mode color table being
+  split across two page-boundary chunks (p022-022 / p023-024). Separately,
+  this session's own `search_docs("2.2.9")` overflowed to an 84,646-
+  character response because `matching_keys` has no minimum term length
+  before substring containment (single-digit tokens like "2"/"9" match
+  almost the whole vocabulary) and `run_search` caps neither hit count nor
+  output size (step 12). Full scope for both in §11/§12 above. Next action:
+  ask user for permission to start STEP 12 first (smaller, addresses the
+  overflow that just actually happened) on branch
+  refactor/step-12-result-bounds; step 11 (soft-AND ranking) after.
+- 2026-07-12 — STEP 12 HANDED TO CODEX. User confirmed intent to hand off
+  now. Codex-ready design doc at designs/step-12-result-bounds.md: minimum
+  substring-match term length (index.rs matching_keys) plus a hard cap on
+  hits formatted by run_search (main.rs), with exact code locations,
+  constants, before/after snippets, test plan, and the live "2.2.9"
+  overflow repro as the acceptance check. Claude pre-created and pushed the
+  branch (refactor/step-12-result-bounds, off master) so Codex starts clean
+  per the doc's Orientation section. Row 12 flipped to in progress. Next
+  action: wait for Codex's PR, then the usual review (verify content landed
+  on master not just the merge label; run tests in the devcontainer; live
+  repro the "2.2.9" query no longer overflows; flip dashboard; clean up
+  branch). Step 11 (soft-AND ranking) remains not started, to be handed off
+  separately after step 12 lands.
