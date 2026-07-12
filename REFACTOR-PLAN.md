@@ -59,7 +59,7 @@ cargo is not installed on the Windows host.
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
-| 10 | streamable-HTTP transport (browser/remote clients) | not started | design ready: designs/step-10-streamable-http-transport.md — assigned to Codex; awaiting user approval to start |
+| 10 | streamable-HTTP transport (browser/remote clients) | in progress | branch refactor/step-10-http-transport created off master (8ae84dd); handed to Codex 2026-07-06 |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -695,3 +695,11 @@ Newest entry last. Every status change in the dashboard gets a line here.
   correctly opened a diagram image per the updated instructions. Next
   action: ask user for permission to hand designs/step-10-streamable-
   http-transport.md to Codex for step 10.
+- 2026-07-06 — STEP 10 HANDED TO CODEX. User confirmed intent to give
+  Codex the design doc directly; Claude pre-created and pushed the
+  branch (refactor/step-10-http-transport, off master @ 8ae84dd) so
+  Codex starts clean per the doc's "Orientation" section. Codex should
+  work on this branch, open a PR to master when done. Next action:
+  wait for Codex's PR, then the usual review (verify content actually
+  landed on master, not just the merge label; run tests; check the
+  curl acceptance sequence; flip dashboard; clean up branch).
