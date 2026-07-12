@@ -61,7 +61,7 @@ cargo is not installed on the Windows host.
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
 | 11 | soft-AND / coverage-ranked matching in search_docs | not started | designed 2026-07-12; see §11 |
-| 12 | minimum term length + hit-count cap on search_docs output | in progress | implemented + verified locally 2026-07-12; PR still needed |
+| 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -877,3 +877,16 @@ Newest entry last. Every status change in the dashboard gets a line here.
   reviews/merges; then verify content lands on master (not just the merge
   label), flip dashboard to complete, clean up branch. Step 11 (soft-AND
   ranking) remains not started.
+- 2026-07-12 — STEP 12 COMPLETE (verified on master, not just the label).
+  User merged PR #16 (merge commit 21142a3). The branch also picked up
+  0785c14 (MAX_IMAGES_PER_DOC 60→500, an unrelated commit the user had
+  pushed to master after the branch was forked) via an explicit merge
+  before the PR closed, so nothing was lost. Confirmed on master itself,
+  not trusted from the GitHub label: grepped the actual files for
+  MIN_SUBSTRING_TERM_LEN (search.rs), MAX_HITS_SHOWN (main.rs), and
+  MAX_IMAGES_PER_DOC = 500 (extract.rs) — all present. cargo clippy
+  --all-targets clean, cargo test 57/57, debug binary rebuilt, all
+  re-run fresh against the merged master in the devcontainer. Branch
+  refactor/step-12-result-bounds deleted local + remote. Step 11
+  (soft-AND ranking) is the only remaining designed-but-not-started item;
+  needs its own design doc and hand-off before work begins.
