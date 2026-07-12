@@ -854,3 +854,26 @@ Newest entry last. Every status change in the dashboard gets a line here.
   search_docs("2.2.9") returned 24 results showing top 20 with an omitted
   trailer instead of the previous 84K-character dump. Next action: commit,
   push, and open PR to master.
+- 2026-07-12 — CLAUDE INDEPENDENT REVIEW of Codex's step 12 work (before
+  opening the PR, per the same protocol used for steps 8/9a/10). Code
+  matches designs/step-12-result-bounds.md exactly: MIN_SUBSTRING_TERM_LEN
+  = 3 added to search.rs's tuning-knob block and threaded into
+  matching_keys (index.rs) so terms below the threshold require an exact
+  vocab-key match instead of `.contains()`; MAX_HITS_SHOWN = 20 added to
+  main.rs and threaded into run_search with an honest "showing top N" /
+  "…M more result(s) omitted" trailer, never a silent truncation. Existing
+  3-character "amr" substring test untouched (regression-safe). Re-ran
+  everything independently via `docker exec` against kuka-mcp-server
+  (not just trusting Codex's self-reported numbers): `cargo clippy
+  --all-targets` clean, `cargo test` 57/57 (42 lib + 6 extract-bin +
+  9 main-bin, including the two new tests
+  matching_keys_requires_exact_match_below_minimum_term_length and
+  search_tool_caps_hit_count_with_trailer), debug binary rebuilt. Live
+  stdio repro of the exact query that previously overflowed: the JSON-RPC
+  `search_docs("2.2.9")` call now returns "Found 24 result(s) for '2.2.9',
+  showing top 20" + "…4 more result(s) omitted. Add more specific terms to
+  narrow the query." — 20 kuka://docs/ hits, ~35.8KB total, versus the
+  prior 84,646-character dump. PR opened to master. Next action: user
+  reviews/merges; then verify content lands on master (not just the merge
+  label), flip dashboard to complete, clean up branch. Step 11 (soft-AND
+  ranking) remains not started.
