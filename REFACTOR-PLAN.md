@@ -1132,3 +1132,22 @@ Newest entry last. Every status change in the dashboard gets a line here.
   multi-term sanity still ranks p022-022 above p023-024 because p022 matches
   more non-red terms, so no ranking behavior was widened beyond the §14
   matcher change. Next action: open PR and have the user review/merge.
+- 2026-07-12 — CLAUDE INDEPENDENT REVIEW of Codex's step 14 work (PR #19,
+  same protocol as steps 8/9a/10/11/12/13). Code matches
+  designs/step-14-word-boundary-short-terms.md exactly: three-tier gate in
+  matching_keys (exact / prefix+SHORT_TERM_MAX_SUFFIX / contains+fuzzy),
+  new constant documented in search.rs's tuning-knob block, function
+  doc-comment updated to describe all three tiers, and the existing "amr"
+  fixture extended with "AMRs" so the plural now actually exercises the
+  prefix rule. Re-ran independently in the devcontainer: clippy clean,
+  65/65 tests (48 lib + 6 extract + 11 main), build current. Live
+  acceptance verified with the Resource-vs-Continues distinction made
+  explicit (a naive grep is ambiguous since step 13 added Continues
+  pointers): search_docs("red") returns 10 hits, p022-022 is NOT among
+  them — it appears only as the Continues target on the p019-021 hit,
+  which is correct metadata, not a match — and p023-024 (genuine "Red /
+  Solid on" row) IS a hit; search_docs("amr fleet") recall intact. Review
+  comment posted on PR #19. Next action: user reviews/merges; then verify
+  on master, flip dashboard, clean up branch — completing the four-step
+  search-fix arc (11 soft-AND, 12 result bounds, 13 chunk continuity,
+  14 word-boundary matching).
