@@ -17,8 +17,8 @@
 
 use crate::bundle::load_bundle;
 use crate::search::{
-    EXCERPT_AFTER, EXCERPT_BEFORE, MAX_EXCERPTS, MIN_SUBSTRING_TERM_LEN, PROXIMITY_WINDOW,
-    SearchHit, within_typo_tolerance,
+    EXCERPT_AFTER, EXCERPT_BEFORE, FUZZY_MIN_TERM_LEN, MAX_EXCERPTS, MIN_SUBSTRING_TERM_LEN,
+    PROXIMITY_WINDOW, SHORT_TERM_MAX_SUFFIX, SearchHit, within_typo_tolerance,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -142,16 +142,20 @@ impl Index {
         self.vocab.len()
     }
 
-    // All vocabulary keys that count as a match for one query term:
-    // substring containment (covers exact matches and "reflector" finding
-    // "reflectors") or typo tolerance. This scans unique TERMS, not document
-    // text — the vocabulary is tiny compared to the corpus and grows slowly.
+    // All vocabulary keys that count as a match for one query term. Very short
+    // terms require exact matches, 3-character terms allow only bounded suffixes
+    // ("amr" -> "amrs" but not "red" -> "wired"), and longer terms keep
+    // substring containment plus typo tolerance. This scans unique TERMS, not
+    // document text — the vocabulary is tiny compared to the corpus and grows
+    // slowly.
     fn matching_keys(&self, term: &str) -> Vec<&str> {
         self.vocab
             .keys()
             .filter(|key| {
                 if term.len() < MIN_SUBSTRING_TERM_LEN {
                     key.as_str() == term
+                } else if term.len() < FUZZY_MIN_TERM_LEN {
+                    key.starts_with(term) && key.len() <= term.len() + SHORT_TERM_MAX_SUFFIX
                 } else {
                     key.contains(term) || within_typo_tolerance(key, term)
                 }
@@ -702,11 +706,39 @@ title: Fleet Note
 resource: kuka-docs/fleet.pdf
 ---
 
-The KUKA.AMR fleet manager coordinates all vehicles.";
+The KUKA.AMR fleet manager coordinates all AMRs.";
         fs::write(temp_dir.path().join("fleet-note.md"), doc).unwrap();
 
         let hits = run_search(temp_dir.path(), "amr");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "Fleet Note");
+    }
+
+    #[test]
+    fn short_terms_match_prefix_inflections_not_containing_words() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let containing_doc = "\
+---
+type: technical-note
+title: Containing Only
+resource: kuka-docs/containing.pdf
+---
+
+The wired controller is powered by a reduced redundant circuit.";
+        fs::write(temp_dir.path().join("containing-only.md"), containing_doc).unwrap();
+
+        let genuine_doc = "\
+---
+type: technical-note
+title: Genuine Red
+resource: kuka-docs/red.pdf
+---
+
+The red indicator and reds in the status table are documented here.";
+        fs::write(temp_dir.path().join("genuine-red.md"), genuine_doc).unwrap();
+
+        let hits = run_search(temp_dir.path(), "red");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Genuine Red");
     }
 }

@@ -449,9 +449,10 @@ Found 2 result(s) for 'mission status':
   the other words match a document, that partial match can still surface.
   No results means none of the meaningful terms appeared anywhere in the
   bundle — drop or replace the rarest word and retry.
-- Very short terms (1-2 characters) match only exact words. This keeps
-  section numbers and single digits from matching every date, page number,
-  or part number that happens to contain the same character.
+- Very short terms (1-2 characters) match only exact words. Three-character
+  terms match exact words and short prefix inflections such as `AMRs`, but
+  not unrelated containing words such as `wired`, `powered`, or `reduce` for
+  the query `red`.
 - Broad searches are capped at the top 20 matching documents. If more
   results exist, the response says how many were omitted and asks for more
   specific terms rather than dumping an unbounded result set.
