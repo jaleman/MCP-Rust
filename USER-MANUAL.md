@@ -201,6 +201,32 @@ cargo run --release --manifest-path mcp-server/Cargo.toml --bin extract -- \
   Office files are converted to temporary PDFs first; text files ignore this
   flag because they do not need PDF extraction.
 
+### Command reference
+
+The command above is the day-to-day one: extract everything, from inside the
+devcontainer. Other situations call for a slightly different invocation:
+
+| Task | Command |
+|------|---------|
+| Extract **one file** (not a whole folder) | `cargo run --manifest-path mcp-server/Cargo.toml --bin extract -- --force-pdftotext "kuka-docs/My Document.pdf" knowledge` |
+| Extract the **whole folder** | `cargo run --manifest-path mcp-server/Cargo.toml --bin extract -- --force-pdftotext kuka-docs knowledge` |
+| Run from the **Windows host** instead of a container terminal | prefix either command above with `docker exec -w /workspaces/MCP-Rust kuka-mcp-server` |
+| Quieter output (suppress cargo's own build messages) | insert `--quiet` right after `cargo run` |
+| Optimized build (only worth it for very large batches) | insert `--release` right after `cargo run` |
+
+Notes:
+
+- Quote any path containing spaces, as in `"My Document.pdf"` above.
+- The **debug build** (no `--release`) is what you'll use for nearly
+  everything — it's what's already cached in the devcontainer and compiles
+  in a couple of seconds. Add `--release` only if extraction speed itself
+  becomes the bottleneck (large batches of large PDFs).
+- Every command above assumes the current directory is the project root
+  (`/workspaces/MCP-Rust`). If you're not already there, `cd` into it first
+  or run from the Windows host with the `docker exec -w` prefix shown above.
+- After extracting, tell your assistant *"reload the KUKA docs"* so the
+  running server picks up the new bundle (see Section 8).
+
 ### What you'll see
 
 ```
