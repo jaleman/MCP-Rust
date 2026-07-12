@@ -59,6 +59,9 @@ pub struct SearchHit {
     /// document — the presentation layer renders them as kuka://images/{name}
     /// resource URIs so multimodal agents can view them alongside the text.
     pub images: Vec<String>,
+    /// Resource stem of the chunk that continues this one, when the matched
+    /// chunk is not the last of its source document.
+    pub continues: Option<String>,
     /// Term frequency normalised by document length, scaled ×1000 so it
     /// stays an integer. Longer documents no longer win just by being long.
     pub score: usize,

@@ -62,7 +62,7 @@ cargo is not installed on the Windows host.
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
 | 11 | soft-AND / coverage-ranked matching in search_docs | complete | PR #17 merged (af04c60); implemented by Codex, reviewed + verified by Claude; lesson refactor-18 |
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
-| 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | in progress | design doc designs/step-13-chunk-continuity.md; handed to Codex on branch refactor/step-13-chunk-continuity; see §13 |
+| 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | in progress | implemented + verified locally 2026-07-12; PR still needed |
 | 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | not started | designed 2026-07-12; see §14 |
 
 ## Resuming mid-step (handoff protocol)
@@ -1060,3 +1060,35 @@ Newest entry last. Every status change in the dashboard gets a line here.
   (verify content landed on master, tests in the devcontainer, live repro
   the p022-022 → p023-024 continuation, flip dashboard, clean up branch).
   Step 14 remains not started, to be handed off after step 13 lands.
+- 2026-07-12 — STEP 13 IMPLEMENTED locally on branch
+  refactor/step-13-chunk-continuity. Document now parses optional parent/pages
+  chunk metadata; DocMeta computes next_stem adjacency by parent and page
+  order; SearchHit carries continues; search output prints Continues:
+  kuka://docs/{next}; read_resource appends a continuation trailer for
+  non-final chunks. Updated USER-MANUAL §7 and lessons refactor-18/19.
+  Verification: clippy clean, 64/64 tests pass, debug binary rebuilt, live
+  stdio search for "three-color indicator light" shows a Continues URI on
+  the BA_KMF pages 9-15 hit, and live resource read for that chunk appends
+  the matching continuation trailer. `cargo fmt --check` still reports
+  pre-existing wrapping differences in unrelated files; no repo-wide format
+  churn applied. Next action: commit, push, and open PR to master.
+- 2026-07-12 — CLAUDE INDEPENDENT REVIEW of Codex's step 13 work (PR #18,
+  same protocol as steps 8/9a/10/11/12). Code matches
+  designs/step-13-chunk-continuity.md at every layer: parent/pages parsed
+  in Document::load (bundle.rs), populate_next_stems in Index::build using
+  the borrow-safe collect-links-then-apply pattern the design warned
+  about, SearchHit.continues threaded through, "Continues:" line in
+  format_hit after Diagrams, and read_resource refactored into a sync
+  read_doc_resource_content helper — a good judgement call beyond the
+  design sketch, since it makes the trailer testable without async
+  plumbing. Re-ran independently in the devcontainer: clippy clean, 64/64
+  tests (47 lib + 6 extract + 11 main; 5 new), build current. Live
+  acceptance = the exact trace failure, all three assertions pass: (1)
+  search_docs("indicator light red yellow green") hit on p022-022 carries
+  "Continues: kuka://docs/ba_kmf_1500p-cb_series_en-20250512-p023-024" —
+  with the excerpt anchored on §2.2.9 itself; (2) resources/read of
+  p022-022 ends with the continuation trailer naming p023-024; (3)
+  resources/read of the manual's final chunk (p167-170) has no trailer.
+  Review comment posted on PR #18. Next action: user reviews/merges; then
+  verify on master, flip dashboard, clean up branch. Step 14 (word-
+  boundary short-term matching) is the last remaining search-arc step.
