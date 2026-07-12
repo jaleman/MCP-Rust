@@ -59,7 +59,7 @@ cargo is not installed on the Windows host.
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
-| 10 | streamable-HTTP transport (browser/remote clients) | in progress | PR #15 open; Claude independently re-verified; awaiting user merge |
+| 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -731,3 +731,17 @@ Newest entry last. Every status change in the dashboard gets a line here.
   opened (Codex had pushed the branch but not opened a PR). Next action:
   user reviews/merges PR #15; then verify content lands on master (not
   just the label), flip dashboard to complete, clean up branch.
+- 2026-07-12 — STEP 10 COMPLETE (verified on master, not just the label).
+  User merged PR #15 (45c2fe1, step 10) and PR #14 (9d77af0, docs command
+  reference — unrelated docs fix, tracked separately from the plan's
+  numbered steps). Confirmed both source commits (66d19c5, 80e9324) are
+  ancestors of master; grepped the actual files for the --http flag,
+  StreamableHttpService, and the manual's Command reference section.
+  55/55 tests pass on merged master, debug build OK. Branches deleted
+  local + remote; no stale worktree registration. ALL PLANNED STEPS NOW
+  COMPLETE (1 through 10). Remaining deferred/roadmap items, none
+  urgent: 5c tantivy/hybrid escape hatch, IDF ranking, index persistence,
+  diagram captioning for searchability, OCR for the one image-only PDF
+  that still needs it if ever revisited, and — noted in step 10's own
+  design as explicitly out of scope — public HTTPS/OAuth for real
+  claude.ai connector exposure (a natural step 11 if that's ever wanted).
