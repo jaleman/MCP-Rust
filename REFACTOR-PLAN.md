@@ -62,6 +62,8 @@ cargo is not installed on the Windows host.
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
 | 11 | soft-AND / coverage-ranked matching in search_docs | not started | designed 2026-07-12; see §11 |
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
+| 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | not started | designed 2026-07-12; see §13 |
+| 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | not started | designed 2026-07-12; see §14 |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -375,6 +377,72 @@ Fix:
 - New tests: a short numeric-heavy query no longer overflows; a query
   matching more than the cap returns exactly the cap plus a truncation
   notice.
+
+## Step 13 — Surface chunk continuity (added post-plan)
+
+Driven by a real trace: an agent found the *start* of the §2.2.9 indicator-
+light table on page 22, but the table continues on a separate chunk
+(`p023-024`) and nothing in the search hit or the resource read said so.
+Six follow-up `search_docs` queries guessing at the continuation's content
+all failed (strict-AND casualties — see step 11), and the agent only
+recovered by calling `list_docs`, eyeballing the full 69-document listing,
+and inferring adjacency from filename page-ranges (`…p022-022` next to
+`…p023-024`) — a workaround for a gap the tool should close itself.
+
+Root cause: `extract.rs`/`frontmatter.rs` already write `parent:` (the
+un-chunked source document's slug) and `pages:` (this chunk's page range)
+into every chunked file's frontmatter (frontmatter.rs `OkfFrontmatter`), and
+`extract_frontmatter_field` already parses them — but neither `Document`
+(bundle.rs) nor `DocMeta` (index.rs) carries these fields forward. The
+information exists on disk and is discarded at load time.
+
+Fix:
+- Add `parent: Option<String>` and `pages: Option<String>` to `Document`
+  (bundle.rs, populated in `Document::load` from the already-parsed
+  frontmatter fields) and thread them into `DocMeta` (index.rs).
+- At index-build time (or lazily in the presentation layer), group chunks
+  sharing the same `parent`, ordered by the leading page number in `pages`,
+  and compute each chunk's next-chunk stem (if any).
+- `format_hit` (main.rs) and the resource-read path grow an optional
+  `Continues: kuka://docs/{next-stem}` line, shown only for chunks that are
+  not the last of their parent — mirrors the existing `Diagrams:` line
+  pattern (present only when applicable, never noise on single-chunk docs).
+- New tests: a synthetic two-chunk bundle (shared `parent`, ascending
+  `pages`) asserts the first chunk's hit/resource carries a `Continues:`
+  line pointing at the second chunk's stem, and the second (last) chunk
+  carries none.
+
+## Step 14 — Word-boundary-aware short-term matching (added post-plan)
+
+Driven by the same trace as step 13: the query `"...red yellow green"`
+happened to land on the correct page-22 chunk, but grepping the actual
+bundle file showed page 22 contains no "Red" table entry at all (that row
+lives in the *next* chunk). The match came from `matching_keys`'s
+`key.contains(term)` matching `"red"` as a raw substring inside **"Wi­red"**
+and "powe**red**" — ordinary English words ending in "-red" (any verb whose
+stem ends in "r": fired, hired, tired, covered, required, offered, ...).
+Step 12's `MIN_SUBSTRING_TERM_LEN = 3` only forces exact matching for 1-2
+character terms; `"red"` is exactly 3 chars, so it still gets raw substring
+containment. The chunk happened to be right this time — not because the
+query worked as intended, but by coincidence (the same chunk also
+genuinely contains "Yellow"/"Green"/"indicator"/"light").
+
+Fix (needs a design decision, not just a threshold bump — raising
+`MIN_SUBSTRING_TERM_LEN` further would also block legitimate short-word
+substring matches like `"amr"` inside `"kuka.amr"`, which must keep
+working):
+- Change substring matching in `matching_keys` from "term appears anywhere
+  in the vocab key" to something word-boundary-aware — candidates to
+  evaluate when this step starts: prefix match only (`key.starts_with(term)`,
+  catches "amr"→"amrs" but not mid/end-of-word coincidences like "red" in
+  "wired"), or restricting plain substring containment to terms at or above
+  `FUZZY_MIN_TERM_LEN` (4 chars) while 3-char terms require exact match
+  (tightens the step-12 boundary by one character), or a hybrid. Pick
+  whichever preserves ALL existing matching tests (`search_substring_matches_short_terms`
+  for "amr" in particular) while rejecting the "red"-in-"wired" case.
+- New test: a synthetic bundle containing only words like "wired" and
+  "powered" (no genuine "red" token) — query `"red"` must return no match.
+  Existing "amr" substring test must still pass unchanged.
 
 ## Step 5c — Escape hatch (designed in, not built)
 
@@ -890,3 +958,21 @@ Newest entry last. Every status change in the dashboard gets a line here.
   refactor/step-12-result-bounds deleted local + remote. Step 11
   (soft-AND ranking) is the only remaining designed-but-not-started item;
   needs its own design doc and hand-off before work begins.
+- 2026-07-12 — STEPS 13 AND 14 DESIGNED (not started). Driven by a second
+  real trace analysis (a different question, "indicator lights available on
+  the KMF"), which re-confirmed step 11's strict-AND problem (10 of 13
+  search_docs calls in the trace returned nothing useful) and surfaced two
+  NEW, previously undiagnosed gaps, both verified against the actual code
+  and bundle files, not guessed: (13) `parent`/`pages` chunk-adjacency
+  frontmatter is written and parsed but never threaded into
+  Document/DocMeta, so an agent that finds the start of a table spanning
+  two chunks has no way to know a continuation exists — cost 6 wasted
+  searches in the trace before falling back to browsing list_docs's raw
+  listing; (14) step 12's MIN_SUBSTRING_TERM_LEN = 3 boundary still lets a
+  3-char term like "red" raw-substring-match unrelated words ending in
+  "-red" ("wired", "powered") — confirmed live via grep on the actual page-
+  22 bundle file, which contains no genuine "Red" table entry at all. Full
+  scope in §13/§14 above. No code touched — REFACTOR-PLAN.md bookkeeping
+  only. Next action: Step 11's Codex handoff design doc
+  (designs/step-11-soft-and-ranking.md) is being written now; steps 13/14
+  remain queued for their own design docs and hand-offs after step 11.
