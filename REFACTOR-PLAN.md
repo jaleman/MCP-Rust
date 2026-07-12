@@ -63,7 +63,7 @@ cargo is not installed on the Windows host.
 | 11 | soft-AND / coverage-ranked matching in search_docs | complete | PR #17 merged (af04c60); implemented by Codex, reviewed + verified by Claude; lesson refactor-18 |
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
 | 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | complete | PR #18 merged (4a201fd); implemented by Codex, reviewed + verified by Claude; lesson refactor-19 |
-| 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | not started | designed 2026-07-12; see §14 |
+| 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | in progress | design doc designs/step-14-word-boundary-short-terms.md; handed to Codex on branch refactor/step-14-word-boundary-short-terms; see §14 |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -1102,3 +1102,18 @@ Newest entry last. Every status change in the dashboard gets a line here.
   12 result bounds, 13 chunk continuity); step 14 (word-boundary
   short-term matching) is the last remaining, designed in §14, awaiting
   its handoff doc and user approval to start.
+- 2026-07-12 — STEP 14 HANDED TO CODEX. Design doc
+  designs/step-14-word-boundary-short-terms.md resolves §14's open design
+  decision: a three-tier gate in matching_keys (index.rs) — 1-2 char terms
+  exact (unchanged from step 12), 3-char terms prefix-match with a bounded
+  suffix (key.starts_with(term) && key.len() <= term.len() +
+  SHORT_TERM_MAX_SUFFIX, new const = 2), 4+ chars contains/fuzzy
+  (unchanged). The suffix bound keeps inflections ("amr"→"amrs",
+  "red"→"reds") while rejecting both the original bug ("red" in
+  "wired"/"powered") and the prefix loophole ("red"→"reduce"/"redundant").
+  Live acceptance: search_docs("red") must exclude p022-022 (only
+  Wired/powered tokens) and include p023-024 (genuine Red table row).
+  Claude pre-created and pushed the branch
+  (refactor/step-14-word-boundary-short-terms, off master). Row 14 flipped
+  to in progress. Next action: wait for Codex's PR, then the usual review;
+  when it lands, the four-step search-fix arc is complete.
