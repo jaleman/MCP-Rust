@@ -29,6 +29,13 @@ pub(crate) const FUZZY_MIN_TERM_LEN: usize = 4;
 /// section numbers, and part numbers across much of a real corpus.
 pub(crate) const MIN_SUBSTRING_TERM_LEN: usize = 3;
 
+/// For terms long enough to leave exact matching but too short for substring
+/// containment, the key must start with the term and exceed it by at most this
+/// many characters. Allows plural/inflection endings ("amr" -> "amrs") while
+/// rejecting different words sharing a prefix ("red" -> "reduce") and words
+/// merely containing the term ("red" in "wired" or "powered").
+pub(crate) const SHORT_TERM_MAX_SUFFIX: usize = 2;
+
 /// Terms up to this length tolerate 1 typo; longer terms tolerate 2.
 pub(crate) const FUZZY_ONE_TYPO_MAX_LEN: usize = 7;
 

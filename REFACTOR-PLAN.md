@@ -63,7 +63,7 @@ cargo is not installed on the Windows host.
 | 11 | soft-AND / coverage-ranked matching in search_docs | complete | PR #17 merged (af04c60); implemented by Codex, reviewed + verified by Claude; lesson refactor-18 |
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
 | 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | complete | PR #18 merged (4a201fd); implemented by Codex, reviewed + verified by Claude; lesson refactor-19 |
-| 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | in progress | design doc designs/step-14-word-boundary-short-terms.md; handed to Codex on branch refactor/step-14-word-boundary-short-terms; see §14 |
+| 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | in progress | implemented + verified locally 2026-07-12; PR still needed |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -1117,3 +1117,37 @@ Newest entry last. Every status change in the dashboard gets a line here.
   (refactor/step-14-word-boundary-short-terms, off master). Row 14 flipped
   to in progress. Next action: wait for Codex's PR, then the usual review;
   when it lands, the four-step search-fix arc is complete.
+
+- 2026-07-12 — STEP 14 IMPLEMENTED + VERIFIED LOCALLY. Codex changed
+  matching_keys from the old two-tier substring gate to the designed
+  three-tier matcher: 1-2 char terms exact, 3-char terms prefix +
+  SHORT_TERM_MAX_SUFFIX, and 4+ char terms containing/fuzzy as before.
+  Added SHORT_TERM_MAX_SUFFIX in search.rs, kept the AMR plural recall
+  fixture green, and added the red/reds vs wired/powered/reduced regression.
+  Updated USER-MANUAL.md and added lesson refactor-20 with a forward link
+  from refactor-19. Verification: focused index/search tests pass; cargo
+  clippy --all-targets clean; cargo test 65/65; cargo build clean. Live
+  MCP search_docs("red") includes p023-024 and does not return p022-022
+  as a result; search_docs("amr fleet") still returns fleet hits. Optional
+  multi-term sanity still ranks p022-022 above p023-024 because p022 matches
+  more non-red terms, so no ranking behavior was widened beyond the §14
+  matcher change. Next action: open PR and have the user review/merge.
+- 2026-07-12 — CLAUDE INDEPENDENT REVIEW of Codex's step 14 work (PR #19,
+  same protocol as steps 8/9a/10/11/12/13). Code matches
+  designs/step-14-word-boundary-short-terms.md exactly: three-tier gate in
+  matching_keys (exact / prefix+SHORT_TERM_MAX_SUFFIX / contains+fuzzy),
+  new constant documented in search.rs's tuning-knob block, function
+  doc-comment updated to describe all three tiers, and the existing "amr"
+  fixture extended with "AMRs" so the plural now actually exercises the
+  prefix rule. Re-ran independently in the devcontainer: clippy clean,
+  65/65 tests (48 lib + 6 extract + 11 main), build current. Live
+  acceptance verified with the Resource-vs-Continues distinction made
+  explicit (a naive grep is ambiguous since step 13 added Continues
+  pointers): search_docs("red") returns 10 hits, p022-022 is NOT among
+  them — it appears only as the Continues target on the p019-021 hit,
+  which is correct metadata, not a match — and p023-024 (genuine "Red /
+  Solid on" row) IS a hit; search_docs("amr fleet") recall intact. Review
+  comment posted on PR #19. Next action: user reviews/merges; then verify
+  on master, flip dashboard, clean up branch — completing the four-step
+  search-fix arc (11 soft-AND, 12 result bounds, 13 chunk continuity,
+  14 word-boundary matching).

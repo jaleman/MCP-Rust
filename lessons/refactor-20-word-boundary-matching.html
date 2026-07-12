@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Refactor Appendix 20: Word-Boundary Matching — Short Terms Without False Credit</title>
+    <link rel="stylesheet" href="../assets/style.css">
+</head>
+
+<body>
+    <div class="container">
+
+        <header class="lesson-header">
+            <div class="lesson-number">Refactor Appendix 20</div>
+            <h1>Word-Boundary Matching — Short Terms Without False Credit</h1>
+            <div class="lesson-meta">
+                <span>Refactor step 14</span>
+                <span>KUKA MCP Server in Rust</span>
+            </div>
+        </header>
+
+        <h2>Why a tiny matcher bug became a ranking bug</h2>
+
+        <p>
+            Step 12 stopped one-character and two-character terms from exploding
+            into broad substring searches. That still left a three-character
+            edge case: <code>red</code> could match vocabulary keys such as
+            <code>wired</code>, <code>powered</code>, and <code>reduced</code>
+            because the matcher used raw <code>contains</code> for every term of
+            length three or more.
+        </p>
+
+        <p>
+            Step 11 then made that more visible. Search ranking now rewards
+            documents for matching more distinct query terms, so a false
+            <code>red</code> match is not just noisy text evidence. It gives the
+            document false coverage credit and can change the order of results.
+        </p>
+
+        <h2>The old two-tier gate</h2>
+
+        <p>
+            The previous rule had one floor: exact matching below
+            <code>MIN_SUBSTRING_TERM_LEN</code>, substring or fuzzy matching above
+            it. Since that constant is <code>3</code>, the word <code>red</code>
+            crossed the floor and entered raw substring matching.
+        </p>
+
+        <p><strong>Rust before:</strong></p>
+        <pre><code>fn matching_keys(&amp;self, term: &amp;str) -&gt; Vec&lt;&amp;str&gt; {
+    self.vocab
+        .keys()
+        .filter(|key| {
+            if term.len() &lt; MIN_SUBSTRING_TERM_LEN {
+                key.as_str() == term
+            } else {
+                key.contains(term) || within_typo_tolerance(key, term)
+            }
+        })
+        .map(String::as_str)
+        .collect()
+}</code></pre>
+
+        <p><strong>Java equivalent:</strong></p>
+        <pre><code>boolean matches(String key, String term) {
+    if (term.length() &lt; MIN_SUBSTRING_TERM_LEN) {
+        return key.equals(term);
+    }
+    return key.contains(term) || withinTypoTolerance(key, term);
+}</code></pre>
+
+        <h2>The new three-tier gate</h2>
+
+        <p>
+            The fix keeps the exact tier for one-character and two-character
+            terms, keeps the old substring/fuzzy tier for terms long enough to
+            be useful, and inserts a middle tier for three-character terms.
+            The middle tier requires the vocabulary key to start with the term
+            and allows only a short suffix.
+        </p>
+
+        <p><strong>Rust after:</strong></p>
+        <pre><code>pub(crate) const SHORT_TERM_MAX_SUFFIX: usize = 2;
+
+fn matching_keys(&amp;self, term: &amp;str) -&gt; Vec&lt;&amp;str&gt; {
+    self.vocab
+        .keys()
+        .filter(|key| {
+            if term.len() &lt; MIN_SUBSTRING_TERM_LEN {
+                key.as_str() == term
+            } else if term.len() &lt; FUZZY_MIN_TERM_LEN {
+                key.starts_with(term) &amp;&amp; key.len() &lt;= term.len() + SHORT_TERM_MAX_SUFFIX
+            } else {
+                key.contains(term) || within_typo_tolerance(key, term)
+            }
+        })
+        .map(String::as_str)
+        .collect()
+}</code></pre>
+
+        <p><strong>Java equivalent:</strong></p>
+        <pre><code>static final int SHORT_TERM_MAX_SUFFIX = 2;
+
+boolean matches(String key, String term) {
+    if (term.length() &lt; MIN_SUBSTRING_TERM_LEN) {
+        return key.equals(term);
+    }
+    if (term.length() &lt; FUZZY_MIN_TERM_LEN) {
+        return key.startsWith(term)
+            &amp;&amp; key.length() &lt;= term.length() + SHORT_TERM_MAX_SUFFIX;
+    }
+    return key.contains(term) || withinTypoTolerance(key, term);
+}</code></pre>
+
+        <h2>Why prefix plus a length guard</h2>
+
+        <p>
+            A plain prefix rule fixes the original noise class:
+            <code>red</code> no longer matches <code>wired</code> or
+            <code>powered</code>. The length guard fixes the next loophole:
+            <code>red</code> should not match <code>reduce</code> or
+            <code>redundant</code> just because they start with the same three
+            letters. With a two-character suffix allowance, plural and small
+            inflection forms such as <code>reds</code>, <code>AMRs</code>, and
+            <code>boxes</code> still work.
+        </p>
+
+        <p>
+            In Java, you might model this as named predicates. In Rust, the
+            chain of <code>if</code> branches is clearer because the term length
+            tiers are ordered and mutually exclusive.
+        </p>
+
+        <pre><code>Predicate&lt;String&gt; exact = key -&gt; key.equals(term);
+Predicate&lt;String&gt; shortPrefix = key -&gt;
+    key.startsWith(term) &amp;&amp; key.length() &lt;= term.length() + SHORT_TERM_MAX_SUFFIX;
+Predicate&lt;String&gt; longRecall = key -&gt;
+    key.contains(term) || withinTypoTolerance(key, term);</code></pre>
+
+        <h2>What the tests protect</h2>
+
+        <p>
+            The new regression fixture creates one document whose only related
+            words are <code>wired</code>, <code>powered</code>,
+            <code>reduced</code>, and <code>redundant</code>, plus a second
+            document with genuine <code>red</code> and <code>reds</code> tokens.
+            Searching for <code>red</code> must return only the genuine document.
+        </p>
+
+        <p>
+            The existing <code>amr</code> test now also includes
+            <code>AMRs</code>. That protects the reason this is not exact-only:
+            real manuals pluralize short technical words, and those matches
+            should still count.
+        </p>
+
+        <h2>Side-by-side summary</h2>
+
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>Java</th>
+                    <th>Rust</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>String.equals</code> for tiny terms</td>
+                    <td><code>key.as_str() == term</code></td>
+                </tr>
+                <tr>
+                    <td><code>startsWith</code> plus <code>length()</code> guard</td>
+                    <td><code>starts_with</code> plus <code>len()</code> guard</td>
+                </tr>
+                <tr>
+                    <td><code>contains</code> only for longer terms</td>
+                    <td><code>contains</code> only once <code>FUZZY_MIN_TERM_LEN</code> is reached</td>
+                </tr>
+                <tr>
+                    <td>Coverage ranking amplifies false positives</td>
+                    <td>Coverage ranking amplifies false positives</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="ask-teacher">
+            <strong>Questions?</strong> Ask Claude directly. Good questions:
+            "Why not use a stemming library here?",
+            "Why keep substring matching for four-character terms?",
+            or "How did coverage ranking make this bug more important?"
+        </div>
+
+        <nav class="lesson-nav">
+            <a href="refactor-17-bounding-search-output.html">← Refactor Appendix 17: Bounding Search Output</a>
+            <a href="refactor-18-soft-and-ranking.html">← Refactor Appendix 18: Soft-AND Ranking</a>
+            <a href="refactor-19-chunk-continuity.html">← Refactor Appendix 19: Chunk Continuity</a>
+        </nav>
+
+    </div>
+</body>
+
+</html>
