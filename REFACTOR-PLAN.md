@@ -62,7 +62,7 @@ cargo is not installed on the Windows host.
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
 | 11 | soft-AND / coverage-ranked matching in search_docs | complete | PR #17 merged (af04c60); implemented by Codex, reviewed + verified by Claude; lesson refactor-18 |
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
-| 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | not started | designed 2026-07-12; see §13 |
+| 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | in progress | design doc designs/step-13-chunk-continuity.md; handed to Codex on branch refactor/step-13-chunk-continuity; see §13 |
 | 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | not started | designed 2026-07-12; see §14 |
 
 ## Resuming mid-step (handoff protocol)
@@ -1045,3 +1045,18 @@ Newest entry last. Every status change in the dashboard gets a line here.
   arc from the two trace analyses is now 2 of 4 done (11 soft-AND, 12
   result bounds); steps 13 (chunk continuity) and 14 (word-boundary
   short-term matching) remain, 13 being designed for Codex handoff next.
+- 2026-07-12 — STEP 13 HANDED TO CODEX. Design doc
+  designs/step-13-chunk-continuity.md: parse the existing parent/pages
+  chunk frontmatter into Document (bundle.rs), compute each chunk's
+  next_stem at Index::build time via a group-by-parent / sort-by-start-page
+  pass (index.rs), thread a `continues` field through SearchHit
+  (search.rs), and surface it in both presentation paths (main.rs):
+  "Continues: kuka://docs/{next}" line in format_hit and a clearly fenced
+  continuation trailer appended by read_resource. Live acceptance is the
+  exact failure from the trace: a hit on the p022-022 indicator-light
+  chunk must point at p023-024. Claude pre-created and pushed the branch
+  (refactor/step-13-chunk-continuity, off master). Row 13 flipped to in
+  progress. Next action: wait for Codex's PR, then the usual review
+  (verify content landed on master, tests in the devcontainer, live repro
+  the p022-022 → p023-024 continuation, flip dashboard, clean up branch).
+  Step 14 remains not started, to be handed off after step 13 lands.
