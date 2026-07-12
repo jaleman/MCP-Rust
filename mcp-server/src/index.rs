@@ -150,9 +150,10 @@ impl Index {
             .collect()
     }
 
-    /// Runs parsed query terms against the index. Every term must match at
-    /// least one vocabulary key in a document for it to qualify (AND
-    /// semantics, as before). Returns hits sorted by score, highest first.
+    /// Runs parsed query terms against the index. Documents matching more
+    /// distinct query terms rank ahead of partial matches; if no term matches
+    /// anywhere, the result is still empty. Returns hits sorted by coverage,
+    /// then score, highest first.
     pub fn search(&self, terms: &[&str]) -> Vec<SearchHit> {
         if terms.is_empty() {
             return Vec::new();
@@ -169,29 +170,36 @@ impl Index {
                     entry.1.extend(&posting.positions);
                 }
             }
-            // AND semantics: a term that matches nowhere empties the result
-            if docs_for_term.is_empty() {
-                return Vec::new();
-            }
+            // Soft-AND: a term matching nowhere contributes nothing to any
+            // document's coverage/score, but no longer erases the whole query.
             per_term.push(docs_for_term);
         }
 
-        // Intersect: candidate documents contain every term. Sorted so equal
-        // scores keep bundle order deterministically.
-        let mut candidates: Vec<u32> = per_term[0]
-            .keys()
-            .copied()
-            .filter(|id| per_term.iter().all(|m| m.contains_key(id)))
-            .collect();
+        // Union: candidate documents contain at least one term. Coverage
+        // below makes full-AND documents still win; this increases recall
+        // without treating weak partial matches as equally relevant.
+        let mut candidates: Vec<u32> = per_term.iter().flat_map(|m| m.keys().copied()).collect();
         candidates.sort_unstable();
+        candidates.dedup();
 
-        let mut hits: Vec<SearchHit> = Vec::new();
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+
+        let mut ranked: Vec<(usize, SearchHit)> = Vec::new();
         for doc_id in candidates {
             let meta = &self.docs[doc_id as usize];
 
-            let freq_total: u32 = per_term.iter().map(|m| m[&doc_id].0).sum();
-            let per_term_positions: Vec<&Vec<u32>> =
-                per_term.iter().map(|m| &m[&doc_id].1).collect();
+            let coverage = per_term.iter().filter(|m| m.contains_key(&doc_id)).count();
+            let freq_total: u32 = per_term
+                .iter()
+                .filter_map(|m| m.get(&doc_id))
+                .map(|(freq, _)| freq)
+                .sum();
+            let per_term_positions: Vec<&Vec<u32>> = per_term
+                .iter()
+                .filter_map(|m| m.get(&doc_id).map(|(_, positions)| positions))
+                .collect();
 
             // Candidate anchors: every recorded position of every term
             let mut anchors: Vec<u32> = per_term_positions
@@ -209,7 +217,9 @@ impl Index {
                     let co_occurrence = per_term_positions
                         .iter()
                         .filter(|positions| {
-                            positions.iter().any(|&q| q.abs_diff(pos) as usize <= PROXIMITY_WINDOW)
+                            positions
+                                .iter()
+                                .any(|&q| q.abs_diff(pos) as usize <= PROXIMITY_WINDOW)
                         })
                         .count();
                     (co_occurrence, pos)
@@ -239,20 +249,23 @@ impl Index {
                 }
             }
 
-            hits.push(SearchHit {
-                title: meta.title.clone(),
-                stem: meta.stem.clone(),
-                images: meta.images.clone(),
-                // Frequency normalised by document length (×1000 to stay
-                // integral): a focused 2-page note now outranks a long manual
-                // with the same number of scattered mentions.
-                score: (freq_total as usize * 1000) / meta.token_count.max(1),
-                excerpts,
-            });
+            ranked.push((
+                coverage,
+                SearchHit {
+                    title: meta.title.clone(),
+                    stem: meta.stem.clone(),
+                    images: meta.images.clone(),
+                    // Frequency normalised by document length (×1000 to stay
+                    // integral): a focused 2-page note now outranks a long manual
+                    // with the same number of scattered mentions.
+                    score: (freq_total as usize * 1000) / meta.token_count.max(1),
+                    excerpts,
+                },
+            ));
         }
 
-        hits.sort_by_key(|hit| std::cmp::Reverse(hit.score));
-        hits
+        ranked.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.score.cmp(&a.1.score)));
+        ranked.into_iter().map(|(_, hit)| hit).collect()
     }
 }
 
@@ -336,7 +349,10 @@ mod tests {
         let temp_dir = setup_test_bundle();
         let index = Index::build(temp_dir.path()).unwrap();
         assert_eq!(index.doc_count(), 1);
-        assert!(index.term_count() > 10, "body words should be in the vocabulary");
+        assert!(
+            index.term_count() > 10,
+            "body words should be in the vocabulary"
+        );
         assert_eq!(index.docs()[0].title, "Reflector Guide");
     }
 
@@ -364,7 +380,10 @@ Code 0 means KMP 250P";
         fs::write(temp_dir.path().join("payload-guide.md"), doc).unwrap();
 
         let index = Index::build(temp_dir.path()).unwrap();
-        assert!(index.vocab.contains_key("250p"), "repeated content must be indexed");
+        assert!(
+            index.vocab.contains_key("250p"),
+            "repeated content must be indexed"
+        );
         assert_eq!(index.vocab["250p"][0].freq, 3, "every repetition counts");
 
         let hits = run_search(temp_dir.path(), "250p");
@@ -378,7 +397,9 @@ Code 0 means KMP 250P";
         // headers disappear (unsearchable); mid-page repeated content stays.
         use crate::chunk::clean_extracted_text;
 
-        let filler: String = (0..12).map(|i| format!("Filler sentence number {i}.\n")).collect();
+        let filler: String = (0..12)
+            .map(|i| format!("Filler sentence number {i}.\n"))
+            .collect();
         let page = |body: &str| format!("KUKA MANUAL HEADER\n{filler}{body}\n");
         let raw = format!(
             "{}\x0c{}\x0c{}",
@@ -406,9 +427,7 @@ Code 0 means KMP 250P";
     fn positions_are_capped_but_freq_keeps_counting() {
         let temp_dir = tempfile::TempDir::new().unwrap();
         let body = "reflector ".repeat(50);
-        let doc = format!(
-            "---\ntype: t\ntitle: Cap Test\nresource: r\n---\n\n{body}"
-        );
+        let doc = format!("---\ntype: t\ntitle: Cap Test\nresource: r\n---\n\n{body}");
         fs::write(temp_dir.path().join("cap-test.md"), doc).unwrap();
 
         let index = Index::build(temp_dir.path()).unwrap();
@@ -431,7 +450,10 @@ Code 0 means KMP 250P";
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].title, "Reflector Guide");
-        assert_eq!(hits[0].stem, "reflector-guide", "stem is the resource identifier");
+        assert_eq!(
+            hits[0].stem, "reflector-guide",
+            "stem is the resource identifier"
+        );
         assert!(hits[0].score > 0);
         assert!(
             hits[0].excerpts.iter().any(|e| e.contains("150")),
@@ -443,6 +465,46 @@ Code 0 means KMP 250P";
     fn search_returns_no_hits_for_unknown_query() {
         let temp_dir = setup_test_bundle();
         assert!(run_search(temp_dir.path(), "hydraulic pump").is_empty());
+    }
+
+    #[test]
+    fn search_surfaces_partial_match_instead_of_empty() {
+        let temp_dir = setup_test_bundle();
+
+        let hits = run_search(temp_dir.path(), "reflector hydraulic");
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Reflector Guide");
+    }
+
+    #[test]
+    fn search_ranks_full_coverage_above_partial_coverage() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let full_doc = "\
+---
+type: technical-note
+title: Full Coverage
+resource: kuka-docs/full.pdf
+---
+
+Indicator light installed near the access panel for operator status visibility during startup checks.";
+        fs::write(temp_dir.path().join("full-coverage.md"), full_doc).unwrap();
+
+        let partial_doc = format!(
+            "---\ntype: technical-note\ntitle: Partial Coverage\nresource: kuka-docs/partial.pdf\n---\n\n{}",
+            "indicator ".repeat(40)
+        );
+        fs::write(temp_dir.path().join("partial-coverage.md"), partial_doc).unwrap();
+
+        let hits = run_search(temp_dir.path(), "indicator light");
+
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].title, "Full Coverage");
+        assert_eq!(hits[1].title, "Partial Coverage");
+        assert!(
+            hits[1].score > hits[0].score,
+            "fixture must prove coverage outranks raw score"
+        );
     }
 
     #[test]

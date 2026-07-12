@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Refactor Appendix 18: Soft-AND Ranking — Recall Without Noise</title>
+    <link rel="stylesheet" href="../assets/style.css">
+</head>
+
+<body>
+    <div class="container">
+
+        <header class="lesson-header">
+            <div class="lesson-number">Refactor Appendix 18</div>
+            <h1>Soft-AND Ranking — Recall Without Noise</h1>
+            <div class="lesson-meta">
+                <span>Refactor step 11</span>
+                <span>KUKA MCP Server in Rust</span>
+            </div>
+        </header>
+
+        <h2>Why strict AND was brittle</h2>
+
+        <p>
+            The old search behavior treated every query term as mandatory. That
+            sounds precise, but it made real agent searches fragile: one guessed
+            word such as <code>meaning</code> or <code>tower</code> could erase an
+            otherwise useful query. If <code>three-color indicator light</code>
+            matched the right page but <code>meaning</code> appeared nowhere, the
+            whole result became empty.
+        </p>
+
+        <p>
+            Step 12 bounded broad output. Step 11 improves recall: documents can
+            now surface when they match some, but not all, query terms. The
+            important guardrail is ranking by coverage first, so a document that
+            matches more distinct terms beats a document that repeats only one
+            term many times.
+        </p>
+
+        <h2>The old early return</h2>
+
+        <p>
+            The strict behavior came from two places: returning empty when any
+            term matched nowhere, then intersecting all per-term document maps.
+        </p>
+
+        <p><strong>Rust before:</strong></p>
+        <pre><code>for term in terms {
+    let mut docs_for_term: HashMap&lt;u32, (u32, Vec&lt;u32&gt;)&gt; = HashMap::new();
+    // fill docs_for_term...
+    if docs_for_term.is_empty() {
+        return Vec::new();
+    }
+    per_term.push(docs_for_term);
+}
+
+let mut candidates: Vec&lt;u32&gt; = per_term[0]
+    .keys()
+    .copied()
+    .filter(|id| per_term.iter().all(|m| m.contains_key(id)))
+    .collect();</code></pre>
+
+        <p><strong>Java equivalent:</strong></p>
+        <pre><code>for (String term : terms) {
+    Map&lt;Integer, PostingSummary&gt; docsForTerm = findDocs(term);
+    if (docsForTerm.isEmpty()) {
+        return List.of();
+    }
+    perTerm.add(docsForTerm);
+}
+
+Set&lt;Integer&gt; candidates = new HashSet&lt;&gt;(perTerm.get(0).keySet());
+for (Map&lt;Integer, PostingSummary&gt; map : perTerm) {
+    candidates.retainAll(map.keySet());
+}</code></pre>
+
+        <h2>Union candidates, rank by coverage</h2>
+
+        <p>
+            The new version keeps each term's matches, even if that map is empty.
+            Candidates are the union of every document that matched at least one
+            term. Then each candidate receives a coverage count: how many distinct
+            query terms matched that document.
+        </p>
+
+        <p><strong>Rust after:</strong></p>
+        <pre><code>for term in terms {
+    let mut docs_for_term: HashMap&lt;u32, (u32, Vec&lt;u32&gt;)&gt; = HashMap::new();
+    // fill docs_for_term...
+    per_term.push(docs_for_term);
+}
+
+let mut candidates: Vec&lt;u32&gt; = per_term
+    .iter()
+    .flat_map(|m| m.keys().copied())
+    .collect();
+candidates.sort_unstable();
+candidates.dedup();
+
+if candidates.is_empty() {
+    return Vec::new();
+}</code></pre>
+
+        <p><strong>Java equivalent:</strong></p>
+        <pre><code>for (String term : terms) {
+    perTerm.add(findDocs(term));
+}
+
+Set&lt;Integer&gt; candidates = new HashSet&lt;&gt;();
+for (Map&lt;Integer, PostingSummary&gt; map : perTerm) {
+    candidates.addAll(map.keySet());
+}
+if (candidates.isEmpty()) {
+    return List.of();
+}</code></pre>
+
+        <h2>A private ranking key</h2>
+
+        <p>
+            The public <code>SearchHit</code> type did not need a new field. Coverage
+            is an internal ranking key carried beside the hit and discarded before
+            returning:
+        </p>
+
+        <pre><code>let coverage = per_term.iter().filter(|m| m.contains_key(&amp;doc_id)).count();
+let freq_total: u32 = per_term
+    .iter()
+    .filter_map(|m| m.get(&amp;doc_id))
+    .map(|(freq, _)| freq)
+    .sum();
+
+ranked.push((coverage, SearchHit { /* existing fields */ }));
+ranked.sort_by(|a, b| b.0.cmp(&amp;a.0).then_with(|| b.1.score.cmp(&amp;a.1.score)));
+ranked.into_iter().map(|(_, hit)| hit).collect()</code></pre>
+
+        <p>
+            In Java, this would often be a private DTO or record:
+        </p>
+
+        <pre><code>record RankedHit(int coverage, SearchHit hit) {}
+
+ranked.sort(
+    Comparator.comparingInt(RankedHit::coverage).reversed()
+        .thenComparing(r -&gt; r.hit().score(), Comparator.reverseOrder())
+);
+return ranked.stream().map(RankedHit::hit).toList();</code></pre>
+
+        <p>
+            The middle of the search function — proximity scoring and excerpt
+            reading — stayed the same. It already works from the positions that
+            actually exist, so it naturally handles a candidate matching fewer
+            terms than the original query contained.
+        </p>
+
+        <h2>What the tests prove</h2>
+
+        <p>
+            One test searches the existing reflector fixture for
+            <code>reflector hydraulic</code>. The old strict-AND behavior returned
+            empty because <code>hydraulic</code> was absent. The new behavior returns
+            the Reflector Guide because <code>reflector</code> is useful evidence.
+        </p>
+
+        <p>
+            Another test creates two documents: one contains both
+            <code>indicator</code> and <code>light</code>; the other repeats
+            <code>indicator</code> many times and has a higher frequency score. The
+            full-coverage document must rank first anyway. That test protects the
+            core rule: coverage before score.
+        </p>
+
+        <h2>Side-by-side summary</h2>
+
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>Java</th>
+                    <th>Rust</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>retainAll</code> strict intersection</td>
+                    <td>old <code>all(|m| m.contains_key(id))</code></td>
+                </tr>
+                <tr>
+                    <td><code>addAll</code> union candidates</td>
+                    <td><code>flat_map(...keys()).dedup()</code></td>
+                </tr>
+                <tr>
+                    <td>private <code>RankedHit</code> record</td>
+                    <td><code>Vec&lt;(usize, SearchHit)&gt;</code></td>
+                </tr>
+                <tr>
+                    <td>sort by coverage, then score</td>
+                    <td><code>cmp</code> coverage first, <code>then_with</code> score</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="ask-teacher">
+            <strong>Questions?</strong> Ask Claude directly. Good questions:
+            "Why not expose matched-term coverage in SearchHit?",
+            "How would BM25 or IDF interact with coverage ranking?",
+            or "When should search use strict AND instead of soft AND?"
+        </div>
+
+        <nav class="lesson-nav">
+            <a href="refactor-17-bounding-search-output.html">← Refactor Appendix 17: Bounding Search Output</a>
+            <a href="refactor-09-inverted-index.html">← Related: Appendix 9, Inverted Index</a>
+        </nav>
+
+    </div>
+</body>
+
+</html>
