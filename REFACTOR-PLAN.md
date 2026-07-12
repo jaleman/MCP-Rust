@@ -60,7 +60,7 @@ cargo is not installed on the Windows host.
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
-| 11 | soft-AND / coverage-ranked matching in search_docs | not started | designed 2026-07-12; see §11 |
+| 11 | soft-AND / coverage-ranked matching in search_docs | in progress | design doc designs/step-11-soft-and-ranking.md; handed to Codex on branch refactor/step-11-soft-and-ranking; see §11 |
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
 | 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | not started | designed 2026-07-12; see §13 |
 | 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | not started | designed 2026-07-12; see §14 |
@@ -976,3 +976,18 @@ Newest entry last. Every status change in the dashboard gets a line here.
   only. Next action: Step 11's Codex handoff design doc
   (designs/step-11-soft-and-ranking.md) is being written now; steps 13/14
   remain queued for their own design docs and hand-offs after step 11.
+- 2026-07-12 — STEP 11 HANDED TO CODEX. Design doc
+  designs/step-11-soft-and-ranking.md: soft-AND / coverage-ranked matching
+  in Index::search (index.rs), grounded in two real trace analyses (one
+  showing 77% of search_docs calls returning nothing useful due to a single
+  non-matching term erasing otherwise-good partial matches), with exact
+  before/after code, new tests distinguishing full-coverage from
+  partial-coverage ranking, and live-repro verification queries drawn from
+  the traces. Claude pre-created and pushed the branch
+  (refactor/step-11-soft-and-ranking, off master) so Codex starts clean per
+  the doc's Orientation section. Row 11 flipped to in progress. Next
+  action: wait for Codex's PR, then the usual review (verify content landed
+  on master not just the merge label; run tests in the devcontainer; live
+  repro the trace queries that previously returned empty; flip dashboard;
+  clean up branch). Steps 13 and 14 remain not started, to be handed off
+  separately after step 11 lands.
