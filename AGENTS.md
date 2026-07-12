@@ -32,7 +32,10 @@ log — read it before doing any planned work, and keep it updated).
 
 - cargo is **not** installed on the Windows host. Everything runs in the
   devcontainer:
-  `docker exec -w /workspaces/MCP-Rust/mcp-server kuka-mcp-server cargo test`
+  `docker exec kuka-mcp-server bash -c "cd /workspaces/MCP-Rust/mcp-server && cargo test"`
+  (the `-w` flag has been unreliable in this environment — it can fail with
+  "Cwd must be an absolute path" even when given one; `bash -c "cd ... && ..."`
+  works reliably instead)
 - Definition of verified: `cargo clippy --all-targets` clean and all tests
   passing in the devcontainer.
 - `.mcp.json` launches `mcp-server/target/debug/mcp-server` via `docker exec`
