@@ -21,6 +21,11 @@
       }
     }
   },
-  "runArgs": ["--name=kuka-mcp-server"],
+  "runArgs": [
+    "--name=kuka-mcp-server"
+  ],
+  "forwardPorts": [
+    8382
+  ],
   "postCreateCommand": "sudo apt-get update && sudo apt-get install -y mingw-w64 poppler-utils ocrmypdf libreoffice-writer libreoffice-impress && rustup target add x86_64-pc-windows-gnu && rustc --version && cargo --version"
 }

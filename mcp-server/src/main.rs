@@ -3,6 +3,8 @@
 // tool definitions, resource handlers, result formatting, and stdio transport.
 
 use anyhow::{Context as _, Result};
+use axum::Router;
+use clap::Parser;
 use mcp_server::bundle::resource_stem_is_safe;
 use mcp_server::index::Index;
 use mcp_server::search::{SearchHit, parse_query};
@@ -23,11 +25,24 @@ use rmcp::{
     tool,
     tool_handler,
     tool_router,
-    transport::stdio,
+    transport::{
+        stdio,
+        streamable_http_server::{
+            StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+        },
+    },
 };
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+
+#[derive(Debug, Parser)]
+struct Args {
+    /// Listen address for streamable HTTP, e.g. 127.0.0.1:8382. Omit for stdio.
+    #[arg(long)]
+    http: Option<String>,
+}
 
 // The input schema for the search_docs tool.
 // #[derive] generates the Debug, Deserialize, and JsonSchema implementations
@@ -303,8 +318,7 @@ impl ServerHandler for KukaServer {
 
             use base64::Engine as _;
             let blob = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            let contents =
-                ResourceContents::blob(blob, uri.clone()).with_mime_type("image/png");
+            let contents = ResourceContents::blob(blob, uri.clone()).with_mime_type("image/png");
             return Ok(ReadResourceResult::new(vec![contents]));
         }
 
@@ -341,6 +355,8 @@ impl ServerHandler for KukaServer {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
+
     // Send tracing output to stderr so it doesn't mix with MCP's stdout messages.
     // Log level is controlled by the RUST_LOG environment variable at runtime.
     tracing_subscriber::fmt()
@@ -374,9 +390,45 @@ async fn main() -> Result<()> {
         knowledge_dir.display()
     );
 
-    // Attach the server to stdin/stdout and block until the client disconnects
-    let service = KukaServer::new(knowledge_dir, index).serve(stdio()).await?;
-    service.waiting().await?;
+    let server = KukaServer::new(knowledge_dir, index);
+    match args.http {
+        None => {
+            // Attach the server to stdin/stdout and block until the client disconnects.
+            let service = server.serve(stdio()).await?;
+            service.waiting().await?;
+        }
+        Some(addr) => serve_http(addr, server).await?,
+    }
+    Ok(())
+}
+
+async fn serve_http(addr: String, server: KukaServer) -> Result<()> {
+    let socket_addr: SocketAddr = addr
+        .parse()
+        .with_context(|| format!("invalid --http listen address: {addr}"))?;
+
+    // HTTP mode has no authentication in this step. Keep the normal path on
+    // loopback; warn loudly if someone chooses a public bind address.
+    if matches!(socket_addr.ip(), IpAddr::V4(ip) if ip.is_unspecified())
+        || matches!(socket_addr.ip(), IpAddr::V6(ip) if ip.is_unspecified())
+    {
+        tracing::warn!(
+            "HTTP mode has no authentication; binding to {addr} may expose the MCP server. Prefer 127.0.0.1 unless this is protected by a tunnel or firewall."
+        );
+    }
+
+    let service = StreamableHttpService::new(
+        move || Ok(server.clone()),
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
+    let app = Router::new().route_service("/mcp", service);
+    let listener = tokio::net::TcpListener::bind(socket_addr)
+        .await
+        .with_context(|| format!("failed to bind HTTP listener at {addr}"))?;
+
+    tracing::info!("KUKA MCP server listening on http://{addr}/mcp");
+    axum::serve(listener, app).await?;
     Ok(())
 }
 
@@ -390,6 +442,18 @@ async fn main() -> Result<()> {
 mod tool_tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn args_default_to_stdio() {
+        let args = Args::try_parse_from(["mcp-server"]).unwrap();
+        assert_eq!(args.http, None);
+    }
+
+    #[test]
+    fn args_accept_http_listen_address() {
+        let args = Args::try_parse_from(["mcp-server", "--http", "127.0.0.1:8382"]).unwrap();
+        assert_eq!(args.http.as_deref(), Some("127.0.0.1:8382"));
+    }
 
     fn bundle_with_one_doc() -> tempfile::TempDir {
         let temp_dir = tempfile::TempDir::new().unwrap();
@@ -437,7 +501,10 @@ Reflectors must be mounted at a height of 150 to 2000 mm above floor level.";
             text.contains("Resource: kuka://docs/reflector-guide"),
             "hits must carry the actionable resource URI, not a source-file path"
         );
-        assert!(!text.contains(".pdf"), "no source-file paths in tool output");
+        assert!(
+            !text.contains(".pdf"),
+            "no source-file paths in tool output"
+        );
     }
 
     #[test]
@@ -498,7 +565,9 @@ Hydraulic pumps are not a KUKA topic, but this note mentions them.";
         fs::write(temp_dir.path().join("brand-new.md"), doc).unwrap();
 
         let before = server
-            .search_docs(Parameters(SearchInput { query: "hydraulic".to_string() }))
+            .search_docs(Parameters(SearchInput {
+                query: "hydraulic".to_string(),
+            }))
             .unwrap();
         assert!(result_text(&before).contains("No results found"));
 
@@ -506,7 +575,9 @@ Hydraulic pumps are not a KUKA topic, but this note mentions them.";
         assert!(result_text(&reload).contains("2 document(s)"));
 
         let after = server
-            .search_docs(Parameters(SearchInput { query: "hydraulic".to_string() }))
+            .search_docs(Parameters(SearchInput {
+                query: "hydraulic".to_string(),
+            }))
             .unwrap();
         assert!(result_text(&after).contains("Brand New Note"));
     }
@@ -534,13 +605,19 @@ Reflectors must be mounted at a height of 150 mm.";
         fs::remove_dir_all(&bundle_dir).unwrap();
 
         let reload = server.reload_docs().unwrap();
-        assert_eq!(reload.is_error, Some(true), "reload of a vanished dir must error");
+        assert_eq!(
+            reload.is_error,
+            Some(true),
+            "reload of a vanished dir must error"
+        );
         assert!(result_text(&reload).contains("previous index kept"));
 
         // The old index still answers (excerpt read fails silently — the
         // file is gone — but the hit itself must survive)
         let result = server
-            .search_docs(Parameters(SearchInput { query: "reflector".to_string() }))
+            .search_docs(Parameters(SearchInput {
+                query: "reflector".to_string(),
+            }))
             .unwrap();
         assert!(result_text(&result).contains("Survivor Note"));
     }
