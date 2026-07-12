@@ -189,7 +189,7 @@ const MIN_IMAGE_BYTES: u64 = 10 * 1024;
 /// Upper bound on diagrams kept per document — protects the bundle against
 /// image-heavy documents dumping hundreds of files. Truncation is WARNED
 /// about, never silent: dropped diagrams starve later chunks of images.
-const MAX_IMAGES_PER_DOC: usize = 60;
+const MAX_IMAGES_PER_DOC: usize = 500;
 
 /// One extracted diagram: the source page it came from, and its filename
 /// under knowledge/images/.
