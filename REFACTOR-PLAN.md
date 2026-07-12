@@ -63,7 +63,7 @@ cargo is not installed on the Windows host.
 | 11 | soft-AND / coverage-ranked matching in search_docs | complete | PR #17 merged (af04c60); implemented by Codex, reviewed + verified by Claude; lesson refactor-18 |
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
 | 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | complete | PR #18 merged (4a201fd); implemented by Codex, reviewed + verified by Claude; lesson refactor-19 |
-| 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | in progress | implemented + verified locally 2026-07-12; PR still needed |
+| 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | complete | PR #19 merged (27784fa); implemented by Codex, reviewed + verified by Claude; lesson refactor-20 |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -1151,3 +1151,20 @@ Newest entry last. Every status change in the dashboard gets a line here.
   on master, flip dashboard, clean up branch — completing the four-step
   search-fix arc (11 soft-AND, 12 result bounds, 13 chunk continuity,
   14 word-boundary matching).
+- 2026-07-12 — STEP 14 COMPLETE (verified on master, not just the label) —
+  SEARCH-FIX ARC COMPLETE. User merged PR #19 (merge commit 27784fa).
+  Confirmed on master itself: SHORT_TERM_MAX_SUFFIX in search.rs, the
+  three-tier gate in index.rs matching_keys, lesson refactor-20 present.
+  cargo clippy --all-targets clean, cargo test 65/65, debug binary
+  rebuilt — re-run fresh against merged master in the devcontainer.
+  Branch refactor/step-14-word-boundary-short-terms deleted local +
+  remote. ALL FOUR STEPS of the search-fix arc born from the two real
+  agent-trace analyses are now merged: 11 soft-AND/coverage ranking
+  (PR #17), 12 result bounds (PR #16), 13 chunk continuity (PR #18),
+  14 word-boundary short-term matching (PR #19) — lessons refactor-17
+  through refactor-20. Every numbered step 1-14 is complete; remaining
+  deferred/roadmap items unchanged and none urgent: 5c tantivy/hybrid
+  escape hatch (trigger conditions in §5c), IDF ranking, index
+  persistence at larger corpus scale, diagram captioning for
+  searchability, tools/list_changed notification, and public HTTPS/OAuth
+  for claude.ai connector exposure (see NOTES.md "Still genuinely open").
