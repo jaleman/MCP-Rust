@@ -61,7 +61,7 @@ cargo is not installed on the Windows host.
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
 | 10 | streamable-HTTP transport (browser/remote clients) | complete | PR #15 merged (45c2fe1); lesson refactor-16 |
 | 11 | soft-AND / coverage-ranked matching in search_docs | not started | designed 2026-07-12; see §11 |
-| 12 | minimum term length + hit-count cap on search_docs output | in progress | design doc designs/step-12-result-bounds.md; handed to Codex on branch refactor/step-12-result-bounds; see §12 |
+| 12 | minimum term length + hit-count cap on search_docs output | in progress | implemented + verified locally 2026-07-12; PR still needed |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -841,3 +841,16 @@ Newest entry last. Every status change in the dashboard gets a line here.
   repro the "2.2.9" query no longer overflows; flip dashboard; clean up
   branch). Step 11 (soft-AND ranking) remains not started, to be handed off
   separately after step 12 lands.
+- 2026-07-12 — STEP 12 IMPLEMENTED locally on branch
+  refactor/step-12-result-bounds. Added MIN_SUBSTRING_TERM_LEN = 3 so
+  1-2 character terms require exact vocab-key matches in matching_keys,
+  preserving the existing 3-character "amr" substring behavior while
+  preventing single digits from matching dates/section numbers everywhere.
+  Added MAX_HITS_SHOWN = 20 in run_search so broad queries format only the
+  top-ranked hits and include an explicit omitted-count trailer. Added
+  focused tests in index.rs and main.rs, updated USER-MANUAL §7, and wrote
+  lesson refactor-17-bounding-search-output.html. Verification: clippy
+  clean, 57/57 tests pass, debug binary rebuilt, and live stdio
+  search_docs("2.2.9") returned 24 results showing top 20 with an omitted
+  trailer instead of the previous 84K-character dump. Next action: commit,
+  push, and open PR to master.

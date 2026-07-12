@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Refactor Appendix 17: Bounding Search Output — Small Queries, Small Responses</title>
+    <link rel="stylesheet" href="../assets/style.css">
+</head>
+
+<body>
+    <div class="container">
+
+        <header class="lesson-header">
+            <div class="lesson-number">Refactor Appendix 17</div>
+            <h1>Bounding Search Output — Small Queries, Small Responses</h1>
+            <div class="lesson-meta">
+                <span>Refactor step 12</span>
+                <span>KUKA MCP Server in Rust</span>
+            </div>
+        </header>
+
+        <h2>Why this step exists</h2>
+
+        <p>
+            A user can reasonably search for a section number such as
+            <code>2.2.9</code>. The old tokenizer split that into the query terms
+            <code>2</code>, <code>2</code>, and <code>9</code>. Then
+            <code>matching_keys</code> checked whether every vocabulary key
+            <em>contained</em> each term. A single digit appears inside years,
+            page numbers, part numbers, and section numbers across the bundle, so
+            that tiny query expanded into a huge result set.
+        </p>
+
+        <p>
+            The second problem was presentation: <code>run_search</code> formatted
+            every hit it received. The search engine could return a ranked list,
+            but the tool response had no upper bound. Together those two choices
+            produced an 80K-character answer from a small, normal-looking query.
+        </p>
+
+        <h2>Fix 1: exact matching for tiny terms</h2>
+
+        <p>
+            Substring matching is useful for real words: <code>reflector</code>
+            should find <code>reflectors</code>, and <code>amr</code> should still
+            find the tokenized <code>KUKA.AMR</code> content. The fix is a floor:
+            terms shorter than three characters must match a vocabulary key
+            exactly.
+        </p>
+
+        <p><strong>Rust before:</strong></p>
+        <pre><code>fn matching_keys(&amp;self, term: &amp;str) -&gt; Vec&lt;&amp;str&gt; {
+    self.vocab
+        .keys()
+        .filter(|key| key.contains(term) || within_typo_tolerance(key, term))
+        .map(String::as_str)
+        .collect()
+}</code></pre>
+
+        <p><strong>Rust after:</strong></p>
+        <pre><code>pub(crate) const MIN_SUBSTRING_TERM_LEN: usize = 3;
+
+fn matching_keys(&amp;self, term: &amp;str) -&gt; Vec&lt;&amp;str&gt; {
+    self.vocab
+        .keys()
+        .filter(|key| {
+            if term.len() &lt; MIN_SUBSTRING_TERM_LEN {
+                key.as_str() == term
+            } else {
+                key.contains(term) || within_typo_tolerance(key, term)
+            }
+        })
+        .map(String::as_str)
+        .collect()
+}</code></pre>
+
+        <p><strong>Java equivalent:</strong></p>
+        <pre><code>static final int MIN_SUBSTRING_TERM_LEN = 3;
+
+boolean matches(String key, String term) {
+    if (term.length() &lt; MIN_SUBSTRING_TERM_LEN) {
+        return key.equals(term);
+    }
+    return key.contains(term) || withinTypoTolerance(key, term);
+}</code></pre>
+
+        <p>
+            This is not a special case for numbers. It is a general rule: a
+            one-character or two-character token is too broad to use as a
+            substring against the entire vocabulary. Exact matching keeps it
+            meaningful without letting it explode.
+        </p>
+
+        <h2>Fix 2: cap the formatted response</h2>
+
+        <p>
+            Search can still legitimately find many documents. That is fine. The
+            tool response must not serialize all of them into the agent's context.
+            Because hits are already ranked, the presentation layer can show the
+            top N and say exactly what it omitted.
+        </p>
+
+        <p><strong>Rust before:</strong></p>
+        <pre><code>let ranked: Vec&lt;String&gt; = hits.iter().map(format_hit).collect();
+format!(
+    "Found {} result(s) for '{query}':\n\n{}",
+    hits.len(),
+    ranked.join("\n\n")
+)</code></pre>
+
+        <p><strong>Rust after:</strong></p>
+        <pre><code>const MAX_HITS_SHOWN: usize = 20;
+
+let total = hits.len();
+let shown = &amp;hits[..total.min(MAX_HITS_SHOWN)];
+let ranked: Vec&lt;String&gt; = shown.iter().map(format_hit).collect();
+let mut text = format!(
+    "Found {total} result(s) for '{query}'{}:\n\n{}",
+    if total &gt; shown.len() {
+        format!(", showing top {}", shown.len())
+    } else {
+        String::new()
+    },
+    ranked.join("\n\n")
+);
+if total &gt; shown.len() {
+    text.push_str(&amp;format!(
+        "\n\n…{} more result(s) omitted. Add more specific terms to narrow the query.",
+        total - shown.len()
+    ));
+}</code></pre>
+
+        <p><strong>Java equivalent:</strong></p>
+        <pre><code>static final int MAX_HITS_SHOWN = 20;
+
+List&lt;Hit&gt; shown = hits.stream()
+    .limit(MAX_HITS_SHOWN)
+    .toList();
+
+String body = shown.stream()
+    .map(this::formatHit)
+    .collect(Collectors.joining("\n\n"));
+
+if (hits.size() &gt; shown.size()) {
+    body += "\n\n..." + (hits.size() - shown.size())
+        + " more result(s) omitted. Add more specific terms to narrow the query.";
+}</code></pre>
+
+        <p>
+            The Java lesson is the same as the Rust lesson: never trust an
+            unbounded <code>collect()</code> into a response body. If the caller is
+            an AI agent, the response body is context budget, not a log file.
+        </p>
+
+        <h2>What the tests protect</h2>
+
+        <p>
+            The index test builds a document containing <code>2026</code> and
+            proves that searching for <code>2</code> no longer matches it by
+            substring. It also confirms that searching for <code>2026</code>
+            still works. The existing <code>amr</code> regression test protects
+            the chosen threshold: three-character terms still substring-match.
+        </p>
+
+        <p>
+            The tool test builds more than 20 matching fixture documents and
+            checks the response: exactly 20 bullet entries, the original total,
+            and a clear omitted-count trailer. That is the contract agents need:
+            ranked, bounded, and honest.
+        </p>
+
+        <h2>Side-by-side summary</h2>
+
+        <table class="comparison-table">
+            <thead>
+                <tr>
+                    <th>Java</th>
+                    <th>Rust</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>key.equals(term)</code> for tiny terms</td>
+                    <td><code>key.as_str() == term</code> below <code>MIN_SUBSTRING_TERM_LEN</code></td>
+                </tr>
+                <tr>
+                    <td><code>stream().limit(MAX)</code></td>
+                    <td>slice <code>&amp;hits[..total.min(MAX)]</code></td>
+                </tr>
+                <tr>
+                    <td>pagination or response DTO with omitted count</td>
+                    <td>top-N text plus explicit omitted-count trailer</td>
+                </tr>
+                <tr>
+                    <td>avoid unbounded <code>collect()</code> in controllers</td>
+                    <td>avoid unbounded <code>collect()</code> in MCP tool output</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div class="ask-teacher">
+            <strong>Questions?</strong> Ask Claude directly. Good questions:
+            "Why keep exact matching for one-character terms instead of dropping them?",
+            "How is a hard cap different from pagination?",
+            or "Would IDF ranking reduce broad query noise even further?"
+        </div>
+
+        <nav class="lesson-nav">
+            <a href="refactor-16-streamable-http.html">← Refactor Appendix 16: Streamable HTTP</a>
+            <a href="refactor-09-inverted-index.html">← Related: Appendix 9, Inverted Index</a>
+        </nav>
+
+    </div>
+</body>
+
+</html>

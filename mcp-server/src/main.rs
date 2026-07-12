@@ -44,6 +44,11 @@ struct Args {
     http: Option<String>,
 }
 
+/// Hard ceiling on how many documents one search_docs call formats into its
+/// response. Documents are already ranked; this caps worst-case output size
+/// regardless of how broadly a query matches.
+const MAX_HITS_SHOWN: usize = 20;
+
 // The input schema for the search_docs tool.
 // #[derive] generates the Debug, Deserialize, and JsonSchema implementations
 // automatically — equivalent to Lombok @Data + Jackson annotations in Java.
@@ -159,12 +164,25 @@ fn run_search(index: &Index, query: &str) -> CallToolResult {
              try again with fewer or different terms."
         )
     } else {
-        let ranked: Vec<String> = hits.iter().map(format_hit).collect();
-        format!(
-            "Found {} result(s) for '{query}':\n\n{}",
-            hits.len(),
+        let total = hits.len();
+        let shown = &hits[..total.min(MAX_HITS_SHOWN)];
+        let ranked: Vec<String> = shown.iter().map(format_hit).collect();
+        let mut text = format!(
+            "Found {total} result(s) for '{query}'{}:\n\n{}",
+            if total > shown.len() {
+                format!(", showing top {}", shown.len())
+            } else {
+                String::new()
+            },
             ranked.join("\n\n")
-        )
+        );
+        if total > shown.len() {
+            text.push_str(&format!(
+                "\n\n…{} more result(s) omitted. Add more specific terms to narrow the query.",
+                total - shown.len()
+            ));
+        }
+        text
     };
 
     CallToolResult::success(vec![Content::text(text)])
@@ -535,6 +553,30 @@ Reflectors must be mounted at a height of 150 to 2000 mm above floor level.";
         // so it reaches agents on ANY harness, not just clients that read
         // MCP instructions.
         assert!(text.contains("fewer or different terms"));
+    }
+
+    #[test]
+    fn search_tool_caps_hit_count_with_trailer() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        for i in 0..(MAX_HITS_SHOWN + 5) {
+            let doc = format!(
+                "---\ntype: technical-note\ntitle: Shared Topic {i:02}\nresource: kuka-docs/{i:02}.pdf\n---\n\nCommon bounded output topic."
+            );
+            fs::write(temp_dir.path().join(format!("shared-topic-{i:02}.md")), doc).unwrap();
+        }
+        let server = server_over(&temp_dir);
+
+        let result = server
+            .search_docs(Parameters(SearchInput {
+                query: "common topic".to_string(),
+            }))
+            .unwrap();
+
+        let text = result_text(&result);
+        assert!(text.contains("Found 25 result(s) for 'common topic', showing top 20"));
+        assert_eq!(text.matches('•').count(), MAX_HITS_SHOWN);
+        assert!(text.contains("…5 more result(s) omitted"));
+        assert!(text.contains("Add more specific terms"));
     }
 
     #[test]
