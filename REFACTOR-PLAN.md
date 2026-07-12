@@ -59,7 +59,7 @@ cargo is not installed on the Windows host.
 | 8 | OCR ingestion for image-based PDFs | complete | PR #11 merged (b6cbf23), implemented by Codex, reviewed + verified by Claude; lesson refactor-13 |
 | 9a | Office (.docx/.pptx) + plain-text (.txt) ingestion | complete | PR #12 merged (0a035ab), implemented by Codex, reviewed + verified by Claude; lesson refactor-14 |
 | 9b | diagram/image extraction + serving as MCP resources | complete | PR #13 merged (995c399); lesson refactor-15 |
-| 10 | streamable-HTTP transport (browser/remote clients) | in progress | implemented + verified locally 2026-07-12; PR still needed |
+| 10 | streamable-HTTP transport (browser/remote clients) | in progress | PR #15 open; Claude independently re-verified; awaiting user merge |
 
 ## Resuming mid-step (handoff protocol)
 
@@ -715,3 +715,19 @@ Newest entry last. Every status change in the dashboard gets a line here.
   Mcp-Session-Id and `search_docs` for "mission status payload" returned
   Found 4 result(s); no-flag stdio printf-pipe returned the same Found 4
   result(s). Next action: review diff, commit, push, and open PR to master.
+- 2026-07-12 — CLAUDE INDEPENDENT REVIEW of Codex's step 10 work (before
+  opening PR #15, since Codex's own verification ran in a different
+  environment without docker). Code matches designs/step-10-streamable-
+  http-transport.md: --http flag with stdio as the untouched default,
+  rmcp streamable-http feature + axum 0.8 mounted at /mcp, one KukaServer/
+  Arc<RwLock<Index>> shared across the HTTP session factory and any
+  stdio process, unspecified-bind warning, devcontainer port forward.
+  Re-ran everything via docker exec against kuka-mcp-server (independent
+  of Codex's own run): clippy clean, 55/55 tests, debug build OK. Live:
+  curl initialize returned Mcp-Session-Id; search_docs "mission status
+  payload" over HTTP returned "Found 4 result(s)"; the identical stdio
+  printf-pipe call returned the same "Found 4 result(s)" (regression
+  confirmed); binding --http 0.0.0.0 logged the expected WARN. PR #15
+  opened (Codex had pushed the branch but not opened a PR). Next action:
+  user reviews/merges PR #15; then verify content lands on master (not
+  just the label), flip dashboard to complete, clean up branch.
