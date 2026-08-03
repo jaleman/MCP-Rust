@@ -78,6 +78,16 @@ Kept as a map from old plans to what actually happened:
   `notifications/tools/list_changed`; rmcp support and Claude-client handling
   both need verification before teaching/implementing. Fits naturally with a
   future production-deployment step.
+- **Public/marketplace-style exposure (no user-facing login)** — distinct
+  from the internal-team auth used by the Cloudflare Tunnel POC and the
+  Windows-VM design. A marketplace MCP listing looks auth-free to the
+  *consumer* only because the *provider* already built OAuth (or decided
+  the data is fine to serve with no auth at all); this server has
+  proprietary KUKA docs, so that path isn't "skip auth," it's "build real
+  OAuth into mcp-server," per the connector spec — a materially bigger
+  scope than either current design, called out as explicitly out of scope
+  in windows-vm-deployment.md. Revisit only if a genuinely public listing
+  is actually requested, not speculatively.
 - **FocusCenter.png** — decide: OCR it, describe it manually in a hand-written
   OKF file, or leave it out of the bundle.
 
