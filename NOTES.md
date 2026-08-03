@@ -62,6 +62,14 @@ Kept as a map from old plans to what actually happened:
   designs/step-10-streamable-http-transport.md "out of scope" notes).
 - **Diagram-heavy fleet manuals** → step 9b extracts per-page images and
   serves them as kuka://images/ resources; lesson refactor-15.
+- **Production deployment / short-term team exposure** → live 2026-08-03 via
+  `designs/production/cloudflare-tunnel-poc.md` (Cloudflare Tunnel + Access,
+  shared service token, `launchd` on an always-on Mac). Required a real code
+  change (`--allowed-host` CLI flag, since `rmcp`'s Host-header check
+  otherwise rejects the public tunnel hostname) — see
+  `mcp-server/src/main.rs` and USER-MANUAL.md §12. The Windows-VM design
+  (`designs/production/windows-vm-deployment.md`) remains the long-term
+  target this POC precedes, not replaces.
 
 ## Still genuinely open
 
@@ -70,9 +78,6 @@ Kept as a map from old plans to what actually happened:
   `notifications/tools/list_changed`; rmcp support and Claude-client handling
   both need verification before teaching/implementing. Fits naturally with a
   future production-deployment step.
-- **Production deployment / public exposure** — auth (reverse proxy or API
-  key), release packaging, always-on hosting. Hold until the user signals
-  readiness to productionise (personal use first per MISSION.md).
 - **FocusCenter.png** — decide: OCR it, describe it manually in a hand-written
   OKF file, or leave it out of the bundle.
 
