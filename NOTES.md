@@ -62,6 +62,14 @@ Kept as a map from old plans to what actually happened:
   designs/step-10-streamable-http-transport.md "out of scope" notes).
 - **Diagram-heavy fleet manuals** → step 9b extracts per-page images and
   serves them as kuka://images/ resources; lesson refactor-15.
+- **Production deployment / short-term team exposure** → live 2026-08-03 via
+  `designs/production/cloudflare-tunnel-poc.md` (Cloudflare Tunnel + Access,
+  shared service token, `launchd` on an always-on Mac). Required a real code
+  change (`--allowed-host` CLI flag, since `rmcp`'s Host-header check
+  otherwise rejects the public tunnel hostname) — see
+  `mcp-server/src/main.rs` and USER-MANUAL.md §12. The Windows-VM design
+  (`designs/production/windows-vm-deployment.md`) remains the long-term
+  target this POC precedes, not replaces.
 
 ## Still genuinely open
 
@@ -70,23 +78,16 @@ Kept as a map from old plans to what actually happened:
   `notifications/tools/list_changed`; rmcp support and Claude-client handling
   both need verification before teaching/implementing. Fits naturally with a
   future production-deployment step.
-- **Production deployment / public exposure** — auth (reverse proxy or API
-  key), release packaging, always-on hosting. Hold until the user signals
-  readiness to productionise (personal use first per MISSION.md). In
-  progress via `designs/production/cloudflare-tunnel-poc.md` (short-term,
-  per-person Cloudflare Access service tokens) and
-  `designs/production/windows-vm-deployment.md` (target long-term design,
-  shared API key) — both are still internal-team auth models, not public
-  access.
 - **Public/marketplace-style exposure (no user-facing login)** — distinct
-  from the internal-team auth above. A marketplace MCP listing looks
-  auth-free to the *consumer* only because the *provider* already built
-  OAuth (or decided the data is fine to serve with no auth at all); this
-  server has proprietary KUKA docs, so that path isn't "skip auth," it's
-  "build real OAuth into mcp-server," per the connector spec — a materially
-  bigger scope than either current design, called out as explicitly out of
-  scope in windows-vm-deployment.md. Revisit only if a genuinely public
-  listing is actually requested, not speculatively.
+  from the internal-team auth used by the Cloudflare Tunnel POC and the
+  Windows-VM design. A marketplace MCP listing looks auth-free to the
+  *consumer* only because the *provider* already built OAuth (or decided
+  the data is fine to serve with no auth at all); this server has
+  proprietary KUKA docs, so that path isn't "skip auth," it's "build real
+  OAuth into mcp-server," per the connector spec — a materially bigger
+  scope than either current design, called out as explicitly out of scope
+  in windows-vm-deployment.md. Revisit only if a genuinely public listing
+  is actually requested, not speculatively.
 - **FocusCenter.png** — decide: OCR it, describe it manually in a hand-written
   OKF file, or leave it out of the bundle.
 

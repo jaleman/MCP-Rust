@@ -19,6 +19,7 @@ official KUKA documentation as the source of truth.
 9. [Configuration reference](#9-configuration-reference)
 10. [Troubleshooting](#10-troubleshooting)
 11. [Appendix: file formats](#11-appendix-file-formats)
+12. [Cloudflare Tunnel POC access (short-term team deployment)](#12-cloudflare-tunnel-poc-access-short-term-team-deployment)
 
 ---
 
@@ -561,6 +562,76 @@ searchable like any extracted document. Run `reload_docs` after adding.
 `<document-slug>-p<first>-<last>.md`, zero-padded to three digits:
 `...-p001-008.md` covers pages 1–8. Documents that fit in a single chunk
 use the plain slug with no page suffix.
+
+---
+
+## 12. Cloudflare Tunnel POC access (short-term team deployment)
+
+Short-term, internal-team-only access path, live as of 2026-08-03. Full
+design: [`designs/production/cloudflare-tunnel-poc.md`](designs/production/cloudflare-tunnel-poc.md);
+setup runbook: [`designs/production/macos-cloudflare-poc-agent-handoff.md`](designs/production/macos-cloudflare-poc-agent-handoff.md).
+This is explicitly a **POC, not the permanent production deployment** —
+[`designs/production/windows-vm-deployment.md`](designs/production/windows-vm-deployment.md)
+remains the long-term target.
+
+### What this is
+
+`mcp-server` runs as a `launchd` service on an always-on Mac
+(loopback-only, `127.0.0.1:8382`), exposed through a Cloudflare Tunnel at
+`kuka-mcp.whatiskali.dev`, gated by Cloudflare Access. It is **not** a
+public/anonymous endpoint — every request must carry a valid Access
+credential or it's blocked before it ever reaches `mcp-server`. See
+`NOTES.md` → "Still genuinely open" for why this is intentionally
+different from a public MCP marketplace listing.
+
+### Connecting a team member's MCP client
+
+Static config, no interactive login. The client must send two headers on
+every request, in addition to the usual streamable-HTTP transport config:
+
+```json
+{
+  "mcpServers": {
+    "kuka": {
+      "url": "https://kuka-mcp.whatiskali.dev/mcp",
+      "headers": {
+        "CF-Access-Client-Id": "<shared Client ID>",
+        "CF-Access-Client-Secret": "<shared Client Secret>"
+      }
+    }
+  }
+}
+```
+
+Get the current Client ID/Secret from whoever administers the Cloudflare
+account (distributed via a private channel — never committed to this
+repo, never pasted into chat transcripts more than necessary).
+
+### Access model
+
+- One shared Cloudflare Access **Service Token**, checked by a **Service
+  Auth** policy on the `KUKA MCP Server` Access application — this is what
+  team clients actually use.
+- A separate **Emails** allow-list policy exists on the same application
+  for interactive/browser access (e.g. an admin checking the dashboard or
+  debugging) — not what MCP clients use.
+- Both policies are evaluated independently; a request needs to satisfy
+  *one* of them to reach `mcp-server`.
+
+### Operating it
+
+- **Restart on crash**: automatic (`launchd` `KeepAlive` on
+  `com.kuka-mcp.server`, and `cloudflared`'s own LaunchDaemon).
+  Verified 2026-08-03.
+- **Survives reboot**: automatic (`RunAtLoad` on both services).
+  Verified 2026-08-03.
+- **Content updates**: `rsync -avz --delete` the knowledge bundle to
+  `~/kuka-mcp/knowledge/` on the Mac, then call `reload_docs` against the
+  running server through the same authenticated path as any other client
+  — do not restart the service just to pick up new content.
+- **Rotating the shared token**: revoke/regenerate it in the Zero Trust
+  dashboard (Access controls → Service credentials), then redistribute
+  the new Client ID/Secret to the team through the same private channel.
 
 ---
 
