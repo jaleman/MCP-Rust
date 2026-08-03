@@ -42,6 +42,12 @@ struct Args {
     /// Listen address for streamable HTTP, e.g. 127.0.0.1:8382. Omit for stdio.
     #[arg(long)]
     http: Option<String>,
+
+    /// Additional `Host` header value to accept (repeatable), e.g. a public
+    /// tunnel hostname (`kuka-mcp.example.dev`) or `host:port`. Loopback
+    /// hosts (localhost, 127.0.0.1, ::1) are always accepted regardless.
+    #[arg(long = "allowed-host")]
+    allowed_host: Vec<String>,
 }
 
 /// Hard ceiling on how many documents one search_docs call formats into its
@@ -440,12 +446,12 @@ async fn main() -> Result<()> {
             let service = server.serve(stdio()).await?;
             service.waiting().await?;
         }
-        Some(addr) => serve_http(addr, server).await?,
+        Some(addr) => serve_http(addr, server, args.allowed_host).await?,
     }
     Ok(())
 }
 
-async fn serve_http(addr: String, server: KukaServer) -> Result<()> {
+async fn serve_http(addr: String, server: KukaServer, extra_allowed_hosts: Vec<String>) -> Result<()> {
     let socket_addr: SocketAddr = addr
         .parse()
         .with_context(|| format!("invalid --http listen address: {addr}"))?;
@@ -460,10 +466,12 @@ async fn serve_http(addr: String, server: KukaServer) -> Result<()> {
         );
     }
 
+    let mut allowed_hosts = StreamableHttpServerConfig::default().allowed_hosts;
+    allowed_hosts.extend(extra_allowed_hosts);
     let service = StreamableHttpService::new(
         move || Ok(server.clone()),
         Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
+        StreamableHttpServerConfig::default().with_allowed_hosts(allowed_hosts),
     );
     let app = Router::new().route_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind(socket_addr)
@@ -496,6 +504,44 @@ mod tool_tests {
     fn args_accept_http_listen_address() {
         let args = Args::try_parse_from(["mcp-server", "--http", "127.0.0.1:8382"]).unwrap();
         assert_eq!(args.http.as_deref(), Some("127.0.0.1:8382"));
+    }
+
+    #[test]
+    fn args_default_to_no_extra_allowed_hosts() {
+        let args = Args::try_parse_from(["mcp-server"]).unwrap();
+        assert!(args.allowed_host.is_empty());
+    }
+
+    #[test]
+    fn args_accept_repeated_allowed_host() {
+        let args = Args::try_parse_from([
+            "mcp-server",
+            "--allowed-host",
+            "kuka-mcp.example.dev",
+            "--allowed-host",
+            "kuka-mcp.example.dev:8443",
+        ])
+        .unwrap();
+        assert_eq!(
+            args.allowed_host,
+            vec!["kuka-mcp.example.dev", "kuka-mcp.example.dev:8443"]
+        );
+    }
+
+    #[test]
+    fn extra_allowed_hosts_are_added_to_loopback_defaults() {
+        let extra = vec!["kuka-mcp.example.dev".to_string()];
+        let mut allowed_hosts = StreamableHttpServerConfig::default().allowed_hosts;
+        allowed_hosts.extend(extra);
+        let config = StreamableHttpServerConfig::default().with_allowed_hosts(allowed_hosts);
+        assert!(config.allowed_hosts.contains(&"localhost".to_string()));
+        assert!(config.allowed_hosts.contains(&"127.0.0.1".to_string()));
+        assert!(config.allowed_hosts.contains(&"::1".to_string()));
+        assert!(
+            config
+                .allowed_hosts
+                .contains(&"kuka-mcp.example.dev".to_string())
+        );
     }
 
     fn bundle_with_one_doc() -> tempfile::TempDir {
