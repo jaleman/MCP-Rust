@@ -27,62 +27,68 @@ can be rotated.
 
 ---
 
-## Claude Desktop
+## Claude Desktop, claude.ai (web), and Claude mobile — currently NOT supported
 
-Edit your `claude_desktop_config.json`:
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+**Do not spend time trying to add this server as a Custom Connector in
+Claude Desktop, claude.ai web, or the Claude mobile app.** We built and
+tested an OAuth-fronted path for exactly this (a Cloudflare Access "Managed
+OAuth" MCP Server Portal in front of the same origin) and it fails at the
+Connect step with *"Authorization with the MCP server failed"* — a known,
+already-reported bug in Anthropic's `claude-ai-mcp` tracker
+([issue #410](https://github.com/anthropics/claude-ai-mcp/issues/410)),
+closed **"not planned."** It affects the Connectors feature across Desktop,
+web, and mobile equally (they share the same connector implementation) —
+this isn't a per-platform quirk.
 
-```json
-{
-  "mcpServers": {
-    "kuka": {
-      "url": "https://kuka-mcp.whatiskali.dev/mcp",
-      "headers": {
-        "CF-Access-Client-Id": "<your Client ID>",
-        "CF-Access-Client-Secret": "<your Client Secret>"
-      }
-    }
-  }
-}
-```
+Editing `claude_desktop_config.json` directly to add a remote `url` +
+`headers` entry also does not work: that file's `mcpServers` section is for
+**local (stdio) servers only** in this app; a remote entry there gets
+silently rejected at startup ("not valid MCP server configurations... were
+skipped").
 
-Restart Claude Desktop after saving. The server should appear in the MCP
-server list (hammer/plug icon in the chat input).
+**If you need to use this server from Claude Desktop today, install Claude
+Code instead** (see below) — Claude Code ships as part of, or alongside,
+Claude Desktop and uses a completely different, working configuration path.
 
 ---
 
-## Claude Code (CLI)
+## Claude Code (CLI, and the Claude Code surface inside Claude Desktop)
 
-Either the one-line command:
+This is the **verified-working** path — confirmed both from a standalone
+terminal and from the Claude Code panel inside the Claude Desktop app.
+
+If the `claude` command isn't already on your machine:
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+Then register the server **at user scope**, so it's available no matter
+which directory you start a session from (`--scope user` is the key flag —
+without it, the server is only available in the one project directory you
+ran the command from):
 
 ```bash
 claude mcp add --transport http kuka https://kuka-mcp.whatiskali.dev/mcp \
+  --scope user \
   --header "CF-Access-Client-Id: <your Client ID>" \
   --header "CF-Access-Client-Secret: <your Client Secret>"
 ```
 
-...or add it directly to a project's `.mcp.json` (or your user-level MCP
-config) if you'd rather have it in every session for that project:
-
-```json
-{
-  "mcpServers": {
-    "kuka": {
-      "type": "http",
-      "url": "https://kuka-mcp.whatiskali.dev/mcp",
-      "headers": {
-        "CF-Access-Client-Id": "<your Client ID>",
-        "CF-Access-Client-Secret": "<your Client Secret>"
-      }
-    }
-  }
-}
+Confirm it's registered:
+```bash
+claude mcp list
 ```
+Expect: `kuka: https://kuka-mcp.whatiskali.dev/mcp (HTTP) - ✔ Connected`
 
-Run `claude mcp list` to confirm it's registered, and check `--help` on
-`claude mcp add` if the flag names above have drifted from what your
-installed version expects.
+If you previously added it without `--scope user` (or with a placeholder
+instead of your real secret), remove and re-add:
+```bash
+claude mcp remove kuka
+```
+then re-run the `add` command above.
+
+Check `--help` on `claude mcp add` if the flag names above have drifted
+from what your installed version expects.
 
 ---
 
@@ -159,7 +165,8 @@ your team keeps `.vscode/` in version control.
 Ask your assistant something like *"What are the safe minimum distances for
 a KUKA KMP 1500P?"* — it should call `search_docs` and cite real KUKA
 documentation back at you. If it doesn't seem to be using the tool, check
-that the server shows as connected in your client's MCP server list.
+that the server shows as connected in your client's MCP server list
+(`claude mcp list` for Claude Code).
 
 ## Troubleshooting
 
@@ -169,6 +176,7 @@ that the server shows as connected in your client's MCP server list.
 | `401`/`403` in logs, or client reports auth failure | Wrong or expired `CF-Access-Client-Id`/`Secret` — re-check the values, or ask the admin if the token was rotated |
 | Client doesn't support custom headers on remote MCP servers | Some older client versions only support stdio (locally-spawned) servers — update the client, or ask the admin about alternatives |
 | Tool calls succeed but return no KUKA content | Ask the admin to confirm the knowledge bundle synced correctly on the server |
+| Claude Desktop/web/mobile Custom Connector fails instantly at "Connect" with "Authorization with the MCP server failed" | Known unsupported path — see the Claude Desktop section above. Use Claude Code instead |
 
 If none of this resolves it, ask the admin to run the verification `curl`
 sequence in USER-MANUAL.md §12 to confirm the server itself is healthy
