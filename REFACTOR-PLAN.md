@@ -46,7 +46,7 @@ cargo is not installed on the Windows host.
 > workflow notes) may be committed directly to master and pushed.
 
 | Step | Description | Status | Notes |
-|------|-------------|--------|-------|
+| ------ | ------------- | -------- | ------- |
 | 1 | lib/bin split, shared frontmatter module | complete | commit 17967a8; lessons refactor-01, refactor-02 |
 | 2 | Document + load_bundle, error/traversal/extension fixes | complete | PR #1 merged (948a356); lessons refactor-03, refactor-04 |
 | 3 | SearchHit API, consts, LazyLock stop words, test rewrite | complete | PR #2 merged (1ace0b2); lessons refactor-05, refactor-06 |
@@ -64,10 +64,12 @@ cargo is not installed on the Windows host.
 | 12 | minimum term length + hit-count cap on search_docs output | complete | PR #16 merged (21142a3); implemented by Codex, reviewed + verified by Claude; lesson refactor-17 |
 | 13 | surface chunk continuity (parent/pages adjacency) in hits + resources | complete | PR #18 merged (4a201fd); implemented by Codex, reviewed + verified by Claude; lesson refactor-19 |
 | 14 | word-boundary-aware short-term matching (tighten step 12's substring gate) | complete | PR #19 merged (27784fa); implemented by Codex, reviewed + verified by Claude; lesson refactor-20 |
+| 15 | Media Registry: list_media & get_media tools + media registry loader | complete | PR open; lesson refactor-21 |
 
 ## Resuming mid-step (handoff protocol)
 
 If a step is `in progress`, the Progress Log entry for it must say:
+
 - which files were already changed and which remain,
 - whether the code currently compiles / tests pass,
 - the exact next action.
@@ -199,6 +201,7 @@ struct Posting {
 ```
 
 Build (once at startup, `Index::build(dir)`):
+
 1. Load documents via `load_bundle`.
 2. Compute `repeated_lines` at INDEX time; boilerplate tokens never enter the
    index (query-time filtering dance disappears).
@@ -211,6 +214,7 @@ Build (once at startup, `Index::build(dir)`):
    scoring honest; 16 anchors >> the 3 excerpts ever shown.
 
 Query:
+
 1. `parse_query`; per term: exact vocab lookup, else (≥4 chars) fuzzy-scan
    vocab keys with length pre-filter + levenshtein — over the unique-word
    vocabulary, not every word of every document.
@@ -221,6 +225,7 @@ Query:
    whole words. No document fully loaded at query time.
 
 Server integration:
+
 - `KukaServer { index: Arc<RwLock<Index>>, ... }`; built before
   serve(stdio()); startup log reports docs/terms/build time.
 - list_docs / list_resources read index.docs (no disk).
@@ -282,6 +287,7 @@ acceptance test: the user can ask questions about EmergencyFireAlarm.pdf
 (currently refused by extract with "no text could be extracted").
 
 Suggested approach (design when starting, per protocol ask user first):
+
 - Preprocess with ocrmypdf (Tesseract-based; adds a text layer to the PDF,
   after which the EXISTING pipeline works unchanged — cleanest option), OR
   have extract.rs fall back to invoking OCR when both extractors yield
@@ -342,6 +348,7 @@ one:
   match a single chunk regardless of wording.
 
 Fix:
+
 - `Index::search` (index.rs) stops early-returning when a term matches
   nowhere; each document's coverage (count of distinct matched query terms)
   becomes the primary sort key, the existing length-normalised frequency
@@ -366,6 +373,7 @@ Compounding this, `run_search` (main.rs) formats every hit with no cap
 2,117-line response — unusable in an agent's context window.
 
 Fix:
+
 - Enforce a minimum term length before substring containment is attempted
   in `matching_keys` (index.rs) — terms below a small threshold (e.g. 3
   chars) require an EXACT vocab-key match, not `contains`. (`FUZZY_MIN_TERM_LEN`
@@ -397,6 +405,7 @@ into every chunked file's frontmatter (frontmatter.rs `OkfFrontmatter`), and
 information exists on disk and is discarded at load time.
 
 Fix:
+
 - Add `parent: Option<String>` and `pages: Option<String>` to `Document`
   (bundle.rs, populated in `Document::load` from the already-parsed
   frontmatter fields) and thread them into `DocMeta` (index.rs).
@@ -431,6 +440,7 @@ Fix (needs a design decision, not just a threshold bump — raising
 `MIN_SUBSTRING_TERM_LEN` further would also block legitimate short-word
 substring matches like `"amr"` inside `"kuka.amr"`, which must keep
 working):
+
 - Change substring matching in `matching_keys` from "term appears anywhere
   in the vocab key" to something word-boundary-aware — candidates to
   evaluate when this step starts: prefix match only (`key.starts_with(term)`,
@@ -454,7 +464,7 @@ seconds, or slow fuzzy-vocab scans.
 ## Sequencing
 
 | # | Work | Verify in devcontainer |
-|---|------|------------------------|
+| --- | ------ | ------------------------ |
 | 1 | lib/bin split, shared frontmatter module | cargo test unchanged, both bins build |
 | 2 | Document + load_bundle, error handling, traversal + extension fixes | tests + manual list_docs on real bundle |
 | 3 | SearchHit API, consts, LazyLock stop words, test rewrite | rewritten tests pass |
@@ -514,7 +524,7 @@ Newest entry last. Every status change in the dashboard gets a line here.
   refactor/step-3-searchhit-api.
 - 2026-07-04 — STEP 3 implemented on branch refactor/step-3-searchhit-api
   (commit 793fa54). search.rs is pure domain logic (no rmcp): parse_query
-  + search(docs, terms) -> Vec<SearchHit>; presentation (run_search /
+  - search(docs, terms) -> Vec<SearchHit>; presentation (run_search /
   format_hit, wording, isError) moved to main.rs. Consts for all tuning
   knobs; STOP_WORDS in static LazyLock; clippy fully clean (0 warnings);
   27/27 tests (23 lib + 4 new bin-level; bin tests build own fixture —
@@ -626,9 +636,9 @@ Newest entry last. Every status change in the dashboard gets a line here.
   above. Code: clean_extracted_text + 4 tests in chunk.rs (gotcha
   found: str::lines() doesn't split on \x0c, so page breaks are mapped
   to \n before repetition counting); extract.rs cleans before chunking
-  + pdftotext -layout; SearchHit.resource → SearchHit.stem; format_hit
+  - pdftotext -layout; SearchHit.resource → SearchHit.stem; format_hit
   emits Resource: kuka://docs/{stem}; sharpened search_docs description
-  + get_info workflow instructions; CLAUDE.md added. 46/46 tests
+  - get_info workflow instructions; CLAUDE.md added. 46/46 tests
   (40 lib + 6 bin), clippy clean. Bundle re-extracted (files now clean;
   chunk boundaries shifted slightly due to -layout); debug binary
   rebuilt (client config points at it). Live verify of the exact
@@ -1168,3 +1178,11 @@ Newest entry last. Every status change in the dashboard gets a line here.
   persistence at larger corpus scale, diagram captioning for
   searchability, tools/list_changed notification, and public HTTPS/OAuth
   for claude.ai connector exposure (see NOTES.md "Still genuinely open").
+- 2026-09-06 — STEP 15 IMPLEMENTED & COMPLETED on branch
+  refactor/step-15-media-registry. Code: added src/media.rs with MediaItem
+  and MediaRegistry loader; added list_media and get_media MCP tools in
+  src/main.rs; updated reload_docs to reload media registries; exposed
+  kuka://media/... resource reading; un-ignored index.json in .gitignore
+  for kuka-movies and kuka-prints; added lesson refactor-21-media-registry.html.
+  Verification: cargo clippy --all-targets clean; cargo test 68/68 passed;
+  live stdio JSON-RPC calls for list_media and get_media verified.

@@ -11,7 +11,9 @@ log — read it before doing any planned work, and keep it updated).
 
 ## Answering KUKA content questions
 
-- Use the `kuka` MCP server tools. **Always `search_docs` first.**
+- Use the `kuka` MCP server tools.
+- For text documentation and manuals, **always `search_docs` first.**
+- For media assets, electrical prints, mechanical drawings, or videos, **use `list_media` or `get_media`** (topics: `electrical`, `mechanical`, `localization`, `safety`, `vision`, etc.).
 - If the excerpts don't fully answer: retry `search_docs` with different
   terms, or read the `kuka://docs/{name}` resource named in the hit — bundle
   documents are chunked to ~8 KB, so reading one whole is always safe.
@@ -27,6 +29,8 @@ log — read it before doing any planned work, and keep it updated).
   in editor sessions, otherwise the OS default viewer (`Start-Process` on
   Windows, `xdg-open` on Linux). Clients that render MCP images inline
   (Claude Desktop, claude.ai) need none of this.
+- **Media Assets**: Use `list_media` or `get_media` to query videos (`.mov`, `.mp4`)
+  and print PDFs by topic or keyword (e.g., `electrical`, `localization`, `safety`).
 
 ## Build & test
 

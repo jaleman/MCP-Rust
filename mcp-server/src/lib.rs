@@ -12,6 +12,7 @@ pub mod bundle;
 pub mod chunk;
 pub mod frontmatter;
 pub mod index;
+pub mod media;
 pub mod search;
 
 // Test-only helper shared by the tests in bundle.rs and search.rs.

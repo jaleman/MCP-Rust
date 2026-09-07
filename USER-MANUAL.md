@@ -65,6 +65,12 @@ with page-level references back to the source PDFs.
   `kuka://images/…` resources. Search hits list the diagrams belonging to
   the matched section, and multimodal assistants can open and interpret
   them alongside the text.
+- **Media asset registry (videos & prints)**: non-text media assets such as
+  video demonstrations (`.mov`, `.mp4`) and electrical or mechanical print
+  sheets (`.pdf`) are indexed in dedicated `index.json` registries. They are
+  queried by topic (`electrical`, `mechanical`, `safety`, `vision`, etc.)
+  and keywords via `list_media` and `get_media` without cluttering the document
+  text index.
 - **Two MCP transports**: stdio remains the default for local MCP clients;
   optional streamable HTTP lets browser-based or remote clients connect to
   the same server when you start it with `--http`.
@@ -173,6 +179,19 @@ cargo build --release --target x86_64-pc-windows-gnu
 
 Binaries appear under `target/x86_64-pc-windows-gnu/release/` (`.exe`).
 
+### Option D — macOS host build (isolated target directory)
+
+When building natively on a Mac host that shares its workspace directory (`~/Projects/kuka-mcp`) with the Linux devcontainer, use `--target-dir` so macOS build artifacts do not conflict with or overwrite the Linux devcontainer's `target/` directory:
+
+```zsh
+# Run from the repository root on your Mac host
+cargo build --release --manifest-path mcp-server/Cargo.toml --bin mcp-server --target-dir ~/kuka-mcp/mac-target
+
+# Copy the binary to the launchd deployment location
+mkdir -p ~/kuka-mcp/bin
+cp ~/kuka-mcp/mac-target/release/mcp-server ~/kuka-mcp/bin/mcp-server
+```
+
 ### Verifying the build
 
 ```bash
@@ -213,7 +232,7 @@ The command above is the day-to-day one: extract everything, from inside the
 devcontainer. Other situations call for a slightly different invocation:
 
 | Task | Command |
-|------|---------|
+| ------ | --------- |
 | Extract **one file** (not a whole folder) | `cargo run --manifest-path mcp-server/Cargo.toml --bin extract -- --force-pdftotext "kuka-docs/My Document.pdf" knowledge` |
 | Extract the **whole folder** | `cargo run --manifest-path mcp-server/Cargo.toml --bin extract -- --force-pdftotext kuka-docs knowledge` |
 | Run from the **Windows host** instead of a container terminal | prefix either command above with `docker exec -w /workspaces/MCP-Rust kuka-mcp-server` |
@@ -413,10 +432,12 @@ absorbs one or two letter errors in words of four letters or more.
 ### The tools, for reference
 
 | Tool | What it does | Example phrasing |
-|------|--------------|------------------|
+| ------ | -------------- | ------------------ |
 | `search_docs` | Ranked full-text search; returns up to 3 excerpts per matching document, each hit with a `kuka://docs/…` resource URI for reading the full section | "search the KUKA docs for battery charging" |
 | `list_docs` | Lists every document in the bundle, grouped by type | "what KUKA documents do you have?" |
-| `reload_docs` | Rebuilds the search index from the bundle directory | "reload the KUKA docs" |
+| `list_media` | Lists media assets (videos, print PDFs, schematics) matching topic, keyword, or asset type | "find electrical schematics or videos" |
+| `get_media` | Retrieves details for a specific media asset by ID or keyword | "get details for charger-schematics-ady6102" |
+| `reload_docs` | Rebuilds the search index and reloads media registries | "reload the KUKA docs" |
 | `ping` | Health check | "is the KUKA server running?" |
 
 ### Reading whole documents (MCP resources)
@@ -487,12 +508,48 @@ takes the server down. Note that a reload is also the fix if excerpts ever
 look garbled: excerpt text is read live from the bundle files, so editing
 files on disk without reloading leaves the index pointing at stale offsets.
 
+### Adding new media assets (videos and print schematics)
+
+When adding new video demonstrations, electrical prints, or other non-text media assets:
+
+1. **Copy the file into its media folder**:
+   - Place videos (`.mov`, `.mp4`) in `kuka-movies/`.
+   - Place print sheets or schematics (`.pdf`) in `kuka-prints/`.
+   - *(Binary media files in these folders are git-ignored to keep the repository small.)*
+
+2. **Add an entry to the folder's `index.json`**:
+   Open `kuka-movies/index.json` or `kuka-prints/index.json` and append an entry following this schema:
+
+   ```json
+   {
+     "id": "charger-schematics-ady6102",
+     "title": "Charger Schematics A.70.ADY610250008-ADY6102",
+     "type": "print",
+     "topic": "electrical",
+     "keywords": ["electrical", "charger", "schematic", "power", "cabinet"],
+     "mimeType": "application/pdf",
+     "folder": "kuka-prints",
+     "filename": "Charger Schematics - A.70.ADY610250008-ADY6102.pdf",
+     "uri": "kuka://media/kuka-prints/Charger Schematics - A.70.ADY610250008-ADY6102.pdf",
+     "description": "Electrical charger schematic print sheet."
+   }
+   ```
+
+   - **`id`**: Unique kebab-case identifier for the item.
+   - **`type`**: Form of the asset (e.g., `print`, `video`, `diagram`).
+   - **`topic`**: Primary domain topic (e.g. `electrical`, `mechanical`, `pneumatic`, `safety`, `vision`, `localization`, `ecs`, `fleet`, `wifi`).
+   - **`keywords`**: Searchable terms and synonyms.
+   - **`uri`**: Matching resource URI format `kuka://media/<folder>/<filename>`.
+
+3. **Reload the server**:
+   Tell your assistant: *"reload the KUKA docs"* (or call `reload_docs`). The server reloads all `index.json` media registries alongside rebuilding the document index without requiring a server restart.
+
 ---
 
 ## 9. Configuration reference
 
 | Setting | Default | Meaning |
-|---------|---------|---------|
+| --------- | --------- | --------- |
 | `--http <addr>` (CLI flag) | omitted | When omitted, serve MCP over stdin/stdout. When set, listen for streamable HTTP at `<addr>` and mount MCP at `/mcp`. Example: `--http 127.0.0.1:8382`. |
 | `KUKA_KNOWLEDGE_DIR` (env var) | `knowledge` (relative to the server's working directory) | Where the knowledge bundle lives. Read once at startup. |
 | `RUST_LOG` (env var) | off | Logging level, written to **stderr** (never stdout — that would corrupt the MCP stream). `RUST_LOG=info` logs the startup summary: documents, unique terms, index build time. |
@@ -508,7 +565,7 @@ Starting KUKA MCP server: indexed 12 document(s), 1051 unique term(s) in 23.0ms 
 ## 10. Troubleshooting
 
 | Symptom | Likely cause | Fix |
-|---------|--------------|-----|
+| --------- | -------------- | ----- |
 | Server won't start; log says `knowledge directory not found: ... — set KUKA_KNOWLEDGE_DIR or run from the project root` | The bundle path doesn't resolve from the client's working directory | Set `KUKA_KNOWLEDGE_DIR` to an absolute path in the client config, or set the working directory (e.g. `docker exec -w …`) |
 | `no text could be extracted, even after OCR` during extraction | The PDF has no text layer and OCR produced no usable text | Confirm `ocrmypdf` is installed and that the scan is readable; then re-run extraction |
 | `ocrmypdf not found — install ocrmypdf` during extraction | The running environment was not rebuilt after OCR support was added, or `ocrmypdf` is not on `PATH` | Install `ocrmypdf` (`sudo apt-get install -y ocrmypdf`) or rebuild the devcontainer |
@@ -545,7 +602,7 @@ timestamp: 2026-07-04T21:37:13.595435146Z
 ```
 
 | Field | Meaning |
-|-------|---------|
+| ------- | --------- |
 | `type` | Grouping key used by `list_docs` |
 | `title` | Display title in listings and search results |
 | `resource` | The original source file this text came from (`.pdf`, `.docx`, `.pptx`, `.txt`, etc.) |
@@ -563,16 +620,34 @@ searchable like any extracted document. Run `reload_docs` after adding.
 `...-p001-008.md` covers pages 1–8. Documents that fit in a single chunk
 use the plain slug with no page suffix.
 
+### Media registry format (`index.json`)
+
+Each media folder (such as `kuka-movies/` and `kuka-prints/`) contains an `index.json` file. The server automatically scans subdirectories for `index.json` at startup and during `reload_docs`.
+
+Field reference:
+
+| Field | Type | Meaning |
+| ------- | ------ | --------- |
+| `id` | String | Unique resource identifier |
+| `title` | String | Display title |
+| `type` | String | Asset form: `video`, `print`, `diagram`, etc. |
+| `topic` | String | Primary topic (e.g. `electrical`, `mechanical`, `safety`) |
+| `keywords` | Array of Strings | Searchable tags and synonyms |
+| `mimeType` | String | MIME type (e.g. `application/pdf`, `video/mp4`, `video/quicktime`) |
+| `folder` | String | Folder name relative to workspace root (e.g. `kuka-prints`) |
+| `filename` | String | Actual file name on disk |
+| `uri` | String | Resource identifier (`kuka://media/<folder>/<filename>`) |
+| `description` | String (optional) | Brief description of asset contents |
+
 ---
 
-## 12. Cloudflare Tunnel POC access (short-term team deployment)
+## 12. Cloudflare Tunnel POC & Corporate Windows Deployment
 
 Short-term, internal-team-only access path, live as of 2026-08-03. Full
 design: [`designs/production/cloudflare-tunnel-poc.md`](designs/production/cloudflare-tunnel-poc.md);
 setup runbook: [`designs/production/macos-cloudflare-poc-agent-handoff.md`](designs/production/macos-cloudflare-poc-agent-handoff.md).
-This is explicitly a **POC, not the permanent production deployment** —
-[`designs/production/windows-vm-deployment.md`](designs/production/windows-vm-deployment.md)
-remains the long-term target.
+For corporate Windows PC/VM network deployment, see the
+[`designs/production/windows-vm-migration-guide.md`](designs/production/windows-vm-migration-guide.md) runbook.
 
 ### What this is
 
@@ -622,6 +697,25 @@ repo, never pasted into chat transcripts more than necessary).
 
 - **Restart on crash**: automatic (`launchd` `KeepAlive` on
   `com.kuka-mcp.server`, and `cloudflared`'s own LaunchDaemon).
+- **Updating the Mac host deployment**:
+
+  ```zsh
+  # 1. Sync updated knowledge, movies, and prints folders
+  rsync -avz --delete ~/Projects/kuka-mcp/knowledge/ ~/kuka-mcp/knowledge/
+  rsync -avz --delete ~/Projects/kuka-mcp/kuka-movies/ ~/kuka-mcp/kuka-movies/
+  rsync -avz --delete ~/Projects/kuka-mcp/kuka-prints/ ~/kuka-mcp/kuka-prints/
+
+  # 2. Build for macOS using a separate target directory (prevents overwriting devcontainer target)
+  cd ~/Projects/kuka-mcp
+  cargo build --release --manifest-path mcp-server/Cargo.toml --bin mcp-server --target-dir ~/kuka-mcp/mac-target
+  mkdir -p ~/kuka-mcp/bin
+  cp ~/kuka-mcp/mac-target/release/mcp-server ~/kuka-mcp/bin/mcp-server
+
+  # 3. Restart the launchd service
+  launchctl unload ~/Library/LaunchAgents/com.kuka-mcp.server.plist
+  launchctl load ~/Library/LaunchAgents/com.kuka-mcp.server.plist
+  ```
+
   Verified 2026-08-03.
 - **Survives reboot**: automatic (`RunAtLoad` on both services).
   Verified 2026-08-03.
