@@ -4,6 +4,11 @@ extract.exe
 knowledge/
 kuka-docs/
 kuka-docs - Copy/
+kuka-movies/*
+!kuka-movies/index.json
+kuka-png/
+kuka-prints/*
+!kuka-prints/index.json
 
 .mcp.json
 mcp.json

@@ -1,0 +1,88 @@
+[
+    {
+        "id": "charger-schematics-ady6102",
+        "title": "Charger Schematics A.70.ADY610250008-ADY6102",
+        "type": "print",
+        "topic": "electrical",
+        "keywords": [
+            "electrical",
+            "charger",
+            "schematic",
+            "power",
+            "cabinet",
+            "eplan",
+            "drawing"
+        ],
+        "mimeType": "application/pdf",
+        "folder": "kuka-prints",
+        "filename": "Charger Schematics - A.70.ADY610250008-ADY6102.pdf",
+        "uri": "kuka://media/kuka-prints/Charger Schematics - A.70.ADY610250008-ADY6102.pdf",
+        "description": "Electrical charger schematic print sheet."
+    },
+    {
+        "id": "kmp-1500p-print",
+        "title": "KMP 1500P Electrical Drawing & Schematic Print",
+        "type": "print",
+        "topic": "electrical",
+        "keywords": [
+            "electrical",
+            "schematic",
+            "eplan",
+            "drawing",
+            "mechanical",
+            "kmp",
+            "1500p",
+            "platform",
+            "assembly"
+        ],
+        "mimeType": "application/pdf",
+        "folder": "kuka-prints",
+        "filename": "KMP_1500P_en.pdf",
+        "uri": "kuka://media/kuka-prints/KMP_1500P_en.pdf",
+        "description": "EPLAN electrical drawing and schematic print set for the KMP 1500P platform (39 pages)."
+    },
+    {
+        "id": "kmp-3000p-print",
+        "title": "KMP 3000P E-2-D and U-2-D Electrical Drawing & Schematic Print",
+        "type": "print",
+        "topic": "electrical",
+        "keywords": [
+            "electrical",
+            "schematic",
+            "eplan",
+            "drawing",
+            "mechanical",
+            "kmp",
+            "3000p",
+            "platform",
+            "assembly"
+        ],
+        "mimeType": "application/pdf",
+        "folder": "kuka-prints",
+        "filename": "KMP_3000P-E-2-D_&_KMP_3000P-U-2-D_en.pdf",
+        "uri": "kuka://media/kuka-prints/KMP_3000P-E-2-D_&_KMP_3000P-U-2-D_en.pdf",
+        "description": "EPLAN electrical drawing and schematic print set for KMP 3000P E-2-D and U-2-D variants (42 pages)."
+    },
+    {
+        "id": "kmp-600pd-print",
+        "title": "KMP 600PD Electrical Drawing & Schematic Print",
+        "type": "print",
+        "topic": "electrical",
+        "keywords": [
+            "electrical",
+            "schematic",
+            "eplan",
+            "drawing",
+            "mechanical",
+            "kmp",
+            "600pd",
+            "platform",
+            "assembly"
+        ],
+        "mimeType": "application/pdf",
+        "folder": "kuka-prints",
+        "filename": "KMP_600PD_en.pdf",
+        "uri": "kuka://media/kuka-prints/KMP_600PD_en.pdf",
+        "description": "EPLAN electrical drawing and schematic print set for the KMP 600PD platform (Note: cover states 43 pages, source PDF contains 36 pages)."
+    }
+]

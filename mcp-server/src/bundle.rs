@@ -141,6 +141,21 @@ pub fn resource_stem_is_safe(stem: &str) -> bool {
     !stem.is_empty() && !stem.contains(['/', '\\']) && !stem.contains("..")
 }
 
+/// Guards media relative paths against path traversal: relative paths like
+/// "kuka-prints/schematics.pdf" are valid, while parent references (".."),
+/// backslashes, absolute paths, or hidden files are rejected.
+pub fn media_path_is_safe(path: &str) -> bool {
+    if path.is_empty() || path.contains("..") || path.contains('\\') || path.starts_with('/') {
+        return false;
+    }
+    for component in path.split('/') {
+        if component.is_empty() || component.starts_with('.') {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,5 +244,19 @@ Chunk body.";
         assert!(!resource_stem_is_safe("sub/dir"));
         assert!(!resource_stem_is_safe("dir\\file"));
         assert!(!resource_stem_is_safe(""));
+    }
+
+    #[test]
+    fn media_path_guard_validates_relative_paths() {
+        assert!(media_path_is_safe(
+            "kuka-prints/Charger Schematics - A.70.pdf"
+        ));
+        assert!(media_path_is_safe("kuka-movies/01-Localization_Log_EN.mov"));
+        assert!(!media_path_is_safe("../secret"));
+        assert!(!media_path_is_safe("kuka-prints/../secret"));
+        assert!(!media_path_is_safe("/etc/passwd"));
+        assert!(!media_path_is_safe("kuka-prints\\file.pdf"));
+        assert!(!media_path_is_safe(".hidden/file.pdf"));
+        assert!(!media_path_is_safe(""));
     }
 }

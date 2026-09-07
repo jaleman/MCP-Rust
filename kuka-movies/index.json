@@ -1,0 +1,354 @@
+[
+    {
+        "id": "localization-log-en",
+        "title": "Localization Log EN",
+        "type": "video",
+        "topic": "localization",
+        "keywords": [
+            "localization",
+            "log",
+            "diagnostics"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/01-Localization_Log_EN.mov",
+        "filename": "01-Localization_Log_EN.mov"
+    },
+    {
+        "id": "motion-basic-theory-of-collision-detection",
+        "title": "Motion Basic Theory of Collision Detection",
+        "type": "video",
+        "topic": "motion",
+        "keywords": [
+            "motion",
+            "collision detection",
+            "safety"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/01-Motion-Basic_Theory_of_Collision_Detection.mov",
+        "filename": "01-Motion-Basic_Theory_of_Collision_Detection.mov"
+    },
+    {
+        "id": "localization-log-playback-tool-en",
+        "title": "Localization Log Playback Tool EN",
+        "type": "video",
+        "topic": "localization",
+        "keywords": [
+            "localization",
+            "playback",
+            "tool",
+            "log"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/02-Localization_Log_Playback_Tool_EN.mov",
+        "filename": "02-Localization_Log_Playback_Tool_EN.mov"
+    },
+    {
+        "id": "motion-safety-zones-configuration-methods",
+        "title": "Motion Safety Zones Configuration Methods",
+        "type": "video",
+        "topic": "safety",
+        "keywords": [
+            "motion",
+            "safety zones",
+            "configuration",
+            "setup"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/02-Motion-Safety_Zones_Configuration_Methods.mov",
+        "filename": "02-Motion-Safety_Zones_Configuration_Methods.mov"
+    },
+    {
+        "id": "common-localization-issue-troubleshooting-en",
+        "title": "Common Localization Issue Troubleshooting EN",
+        "type": "video",
+        "topic": "localization",
+        "keywords": [
+            "localization",
+            "issue",
+            "troubleshooting",
+            "diagnostics"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/03-Common_Localization_Issue_Troubleshooting_EN.mov",
+        "filename": "03-Common_Localization_Issue_Troubleshooting_EN.mov"
+    },
+    {
+        "id": "upper-visual-calibration-fixture-installation",
+        "title": "Upper Visual Calibration Fixture Installation",
+        "type": "video",
+        "topic": "vision calibration",
+        "keywords": [
+            "vision",
+            "calibration",
+            "fixture",
+            "installation",
+            "upper"
+        ],
+        "mimeType": "video/mp4",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/1.1+上视觉标定工装安装+Upper+Visual+Calibration+Fixture+Installation.mp4",
+        "filename": "1.1+上视觉标定工装安装+Upper+Visual+Calibration+Fixture+Installation.mp4"
+    },
+    {
+        "id": "lower-visual-calibration-fixture-installation",
+        "title": "Lower Visual Calibration Fixture Installation",
+        "type": "video",
+        "topic": "vision calibration",
+        "keywords": [
+            "vision",
+            "calibration",
+            "fixture",
+            "installation",
+            "lower"
+        ],
+        "mimeType": "video/mp4",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/1.2+下视觉标定工装安装+Lower+Visual+Calibration+Fixture+Installation.mp4",
+        "filename": "1.2+下视觉标定工装安装+Lower+Visual+Calibration+Fixture+Installation.mp4"
+    },
+    {
+        "id": "ks-visual-calibration-process",
+        "title": "KS Visual Calibration Process",
+        "type": "video",
+        "topic": "vision calibration",
+        "keywords": [
+            "vision",
+            "calibration",
+            "kuka studio",
+            "process"
+        ],
+        "mimeType": "video/mp4",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/1.3+KS+上下视觉标定流程+KS+Visual+calibration.mp4",
+        "filename": "1.3+KS+上下视觉标定流程+KS+Visual+calibration.mp4"
+    },
+    {
+        "id": "tof-camera-calibration-fixture-installation",
+        "title": "TOF Camera Calibration Fixture Installation",
+        "type": "video",
+        "topic": "tof calibration",
+        "keywords": [
+            "tof",
+            "camera",
+            "calibration",
+            "fixture",
+            "installation"
+        ],
+        "mimeType": "video/mp4",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/2.1+TOF+相机标定工装安装+TOF+Camera+Calibration+Fixture+Installation.mp4",
+        "filename": "2.1+TOF+相机标定工装安装+TOF+Camera+Calibration+Fixture+Installation.mp4"
+    },
+    {
+        "id": "front-and-rear-tof-camera-calibration",
+        "title": "Front and Rear TOF Camera Calibration",
+        "type": "video",
+        "topic": "tof calibration",
+        "keywords": [
+            "tof",
+            "camera",
+            "calibration",
+            "front",
+            "rear"
+        ],
+        "mimeType": "video/mp4",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/2.2+KS+前后TOF+相机标定流程+Front+and+Rear+TOF+Camera+Calibration.mp4",
+        "filename": "2.2+KS+前后TOF+相机标定流程+Front+and+Rear+TOF+Camera+Calibration.mp4"
+    },
+    {
+        "id": "amr-apron-issue",
+        "title": "AMR Apron Issue",
+        "type": "video",
+        "topic": "aprons",
+        "keywords": [
+            "amr",
+            "apron",
+            "issue",
+            "troubleshooting"
+        ],
+        "mimeType": "video/mp4",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/AMR Apron Issue-2025-04-23 04.22.07.303 PM.mp4",
+        "filename": "AMR Apron Issue-2025-04-23 04.22.07.303 PM.mp4"
+    },
+    {
+        "id": "camera-detection-failed-qr-code-en",
+        "title": "Camera Detection Failed (QR Code) EN",
+        "type": "video",
+        "topic": "vision",
+        "keywords": [
+            "camera",
+            "detection",
+            "qr code",
+            "failure",
+            "vision"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/Camera_detection_failed(QRcode)_EN.mov",
+        "filename": "Camera_detection_failed(QRcode)_EN.mov"
+    },
+    {
+        "id": "ecs-automatic-door-en",
+        "title": "ECS Automatic Door EN",
+        "type": "video",
+        "topic": "ecs",
+        "keywords": [
+            "ecs",
+            "automatic door",
+            "integration"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/ECS-Automatic_Door_EN.mov",
+        "filename": "ECS-Automatic_Door_EN.mov"
+    },
+    {
+        "id": "ecs-button-box-en",
+        "title": "ECS Button Box EN",
+        "type": "video",
+        "topic": "ecs",
+        "keywords": [
+            "ecs",
+            "button box",
+            "controls"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/ECS-Button_Box_EN.mov",
+        "filename": "ECS-Button_Box_EN.mov"
+    },
+    {
+        "id": "ecs-common-issues-en",
+        "title": "ECS Common Issues EN",
+        "type": "video",
+        "topic": "ecs",
+        "keywords": [
+            "ecs",
+            "common issues",
+            "troubleshooting"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/ECS-Common_Issues_EN.mov",
+        "filename": "ECS-Common_Issues_EN.mov"
+    },
+    {
+        "id": "ecs-conveyor-line-en",
+        "title": "ECS Conveyor Line EN",
+        "type": "video",
+        "topic": "ecs",
+        "keywords": [
+            "ecs",
+            "conveyor",
+            "line",
+            "integration"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/ECS-Conveyor_Line_EN.mov",
+        "filename": "ECS-Conveyor_Line_EN.mov"
+    },
+    {
+        "id": "ecs-r-arm-en",
+        "title": "ECS R-ARM EN",
+        "type": "video",
+        "topic": "ecs",
+        "keywords": [
+            "ecs",
+            "r-arm",
+            "robot arm"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/ECS-R-ARM_EN.mov",
+        "filename": "ECS-R-ARM_EN.mov"
+    },
+    {
+        "id": "fleet-log-replay-tool-en",
+        "title": "Fleet Log Replay Tool EN",
+        "type": "video",
+        "topic": "fleet",
+        "keywords": [
+            "fleet",
+            "log",
+            "replay",
+            "tool"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/Fleet_Log_Replay_Tool_EN.mov",
+        "filename": "Fleet_Log_Replay_Tool_EN.mov"
+    },
+    {
+        "id": "rack-model-creation-kuka-studio-fleet",
+        "title": "Rack Model Creation in KUKA Studio and KUKA Fleet",
+        "type": "video",
+        "topic": "fleet",
+        "keywords": [
+            "rack",
+            "model",
+            "kuka studio",
+            "fleet",
+            "setup"
+        ],
+        "mimeType": "video/mp4",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/Rack Model Creation in Kuka Studio and Kuka Fleet-20250417_110353-Meeting Recording.mp4",
+        "filename": "Rack Model Creation in Kuka Studio and Kuka Fleet-20250417_110353-Meeting Recording.mp4"
+    },
+    {
+        "id": "webinar-amr-fleet-wcs-troubleshooting",
+        "title": "Webinar AMR Fleet WCS Troubleshooting",
+        "type": "video",
+        "topic": "fleet",
+        "keywords": [
+            "fleet",
+            "wcs",
+            "troubleshooting",
+            "webinar"
+        ],
+        "mimeType": "video/mp4",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/WEBINAR AMR Fleet-WCS Troubleshooting-20260626_155934.mp4",
+        "filename": "WEBINAR AMR Fleet-WCS Troubleshooting-20260626_155934.mp4"
+    },
+    {
+        "id": "wifi-connection-failure-en",
+        "title": "WiFi Connection Failure EN",
+        "type": "video",
+        "topic": "wifi",
+        "keywords": [
+            "wifi",
+            "connection",
+            "failure",
+            "network"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/WiFi_Connection_Failure_EN.mov",
+        "filename": "WiFi_Connection_Failure_EN.mov"
+    },
+    {
+        "id": "wifi-disconnection-en",
+        "title": "WiFi Disconnection EN",
+        "type": "video",
+        "topic": "wifi",
+        "keywords": [
+            "wifi",
+            "disconnection",
+            "network",
+            "troubleshooting"
+        ],
+        "mimeType": "video/quicktime",
+        "folder": "kuka-movies",
+        "uri": "kuka://media/kuka-movies/WiFi_Disconnection_EN.mov",
+        "filename": "WiFi_Disconnection_EN.mov"
+    }
+]

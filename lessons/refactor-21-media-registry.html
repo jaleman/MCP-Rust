@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Refactor Appendix 21: Media Registry — Topic-Based Metadata Search</title>
+    <link rel="stylesheet" href="../assets/style.css">
+</head>
+
+<body>
+    <div class="container">
+
+        <header class="lesson-header">
+            <div class="lesson-number">Refactor Appendix 21</div>
+            <h1>Media Registry — Topic-Based Metadata Search</h1>
+            <div class="lesson-meta">
+                <span>Refactor step 15</span>
+                <span>KUKA MCP Server in Rust</span>
+            </div>
+        </header>
+
+        <h2>Why a separate Media Registry is needed</h2>
+
+        <p>
+            The KUKA knowledge server extracts plain text and PDF manuals into markdown chunk bundles for full-text
+            search.
+            However, operational assets like video demonstrations, electrical schematics, and print sheets are non-text
+            media.
+            Mixing these binary or visual assets into the document extraction pipeline produces low-quality text
+            extractions or fails entirely.
+        </p>
+
+        <p>
+            The media registry introduces a separate layer that indexes media assets by topic, keywords, MIME type, and
+            resource URI
+            without cluttering the document search index.
+        </p>
+
+        <h2>Data Model and Registry JSON</h2>
+
+        <p>
+            Media metadata files reside alongside media asset folders (e.g. <code>kuka-movies/index.json</code> and
+            <code>kuka-prints/index.json</code>). Each index uses a unified JSON schema:
+        </p>
+
+        <pre><code>[
+  {
+    "id": "charger-schematics-ady6102",
+    "title": "Charger Schematics A.70.ADY610250008-ADY6102",
+    "type": "print",
+    "topic": "electrical",
+    "keywords": ["electrical", "charger", "schematic", "power", "cabinet"],
+    "mimeType": "application/pdf",
+    "folder": "kuka-prints",
+    "filename": "Charger Schematics - A.70.ADY610250008-ADY6102.pdf",
+    "uri": "kuka://media/kuka-prints/Charger Schematics - A.70.ADY610250008-ADY6102.pdf",
+    "description": "Electrical charger schematic print sheet."
+  }
+]</code></pre>
+
+        <h2>Rust implementation vs Java equivalent</h2>
+
+        <p>
+            In Rust, <code>MediaItem</code> derives Serde's <code>Serialize</code> and <code>Deserialize</code> traits
+            with
+            <code>rename_all = "camelCase"</code>, translating between JSON field names and idiomatic Rust struct
+            fields.
+        </p>
+
+        <p><strong>Rust MediaItem &amp; Registry Filter:</strong></p>
+        <pre><code>#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaItem {
+    pub id: String,
+    pub title: String,
+    #[serde(rename = "type")]
+    pub media_type: String,
+    pub topic: String,
+    pub keywords: Vec&lt;String&gt;,
+    pub mime_type: String,
+    pub folder: String,
+    pub filename: String,
+    pub uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option&lt;String&gt;,
+}
+
+pub fn list_media(
+    &amp;self,
+    topic: Option&lt;&amp;str&gt;,
+    keyword: Option&lt;&amp;str&gt;,
+    media_type: Option&lt;&amp;str&gt;,
+) -&gt; Vec&lt;MediaItem&gt; {
+    self.items
+        .iter()
+        .filter(|item| {
+            if topic.as_ref().is_some_and(|t| !item.topic.to_lowercase().contains(t)) {
+                return false;
+            }
+            if media_type.as_ref().is_some_and(|m| !item.media_type.to_lowercase().contains(m)) {
+                return false;
+            }
+            if let Some(ref k) = keyword {
+                let matches_keyword = item.keywords.iter().any(|kw| kw.to_lowercase().contains(k))
+                    || item.id.to_lowercase().contains(k)
+                    || item.title.to_lowercase().contains(k)
+                    || item.topic.to_lowercase().contains(k)
+                    || item.description.as_ref().is_some_and(|d| d.to_lowercase().contains(k));
+                if !matches_keyword {
+                    return false;
+                }
+            }
+            true
+        })
+        .cloned()
+        .collect()
+}</code></pre>
+
+        <p><strong>Java equivalent (Jackson + Stream API):</strong></p>
+        <pre><code>@JsonIgnoreProperties(ignoreUnknown = true)
+public class MediaItem {
+    public String id;
+    public String title;
+    @JsonProperty("type")
+    public String mediaType;
+    public String topic;
+    public List&lt;String&gt; keywords;
+    public String mimeType;
+    public String folder;
+    public String filename;
+    public String uri;
+    public String description;
+}
+
+public List&lt;MediaItem&gt; listMedia(String topic, String keyword, String mediaType) {
+    String t = topic != null ? topic.toLowerCase().trim() : null;
+    String k = keyword != null ? keyword.toLowerCase().trim() : null;
+    String m = mediaType != null ? mediaType.toLowerCase().trim() : null;
+
+    return items.stream()
+        .filter(item -&gt; t == null || item.topic.toLowerCase().contains(t))
+        .filter(item -&gt; m == null || item.mediaType.toLowerCase().contains(m))
+        .filter(item -&gt; k == null || matchesKeyword(item, k))
+        .collect(Collectors.toList());
+}</code></pre>
+
+        <h2>MCP Tool Surface</h2>
+
+        <p>
+            The server exposes two new tools to clients:
+        </p>
+        <ul>
+            <li><code>list_media</code>: queries media assets matching a topic, keyword, or type filter.</li>
+            <li><code>get_media</code>: retrieves exact metadata for a specific media asset by ID or keyword.</li>
+        </ul>
+
+    </div>
+</body>
+
+</html>
