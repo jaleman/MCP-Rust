@@ -1186,3 +1186,13 @@ Newest entry last. Every status change in the dashboard gets a line here.
   for kuka-movies and kuka-prints; added lesson refactor-21-media-registry.html.
   Verification: cargo clippy --all-targets clean; cargo test 68/68 passed;
   live stdio JSON-RPC calls for list_media and get_media verified.
+
+- 2026-09-11 — Removed duplicate source PDF. While profiling the corpus for the
+  sibling kuka-llm project, `cmp` showed `kuka-docs/BA_KMP_600P-U-D_series_en.pdf`
+  was byte-identical to `kuka-docs/BA_KMP_600P_series_en_V1.pdf`, so the index
+  carried the KMP 600P manual twice (61 chunks + 176 images each). Deleted the
+  `-U-D` PDF, its `knowledge/ba_kmp_600p-u-d_series_en-*` chunks and images
+  (all gitignored, so this commit is bookkeeping only). `BA_KMP_600P-EU-D`
+  is a genuinely different manual and stays. **Deployed server**: the HTTP
+  deployment keeps its own copy of `kuka-docs/` and `knowledge/`; apply the
+  same deletion there and call `reload_docs`. No code change, no rebuild.
